@@ -183,10 +183,10 @@ def auth_login(data: LoginData):
                 # 🌟 すでに登録済みのリピーターなら、MySQLの整数ID（例: 1）をそのまま返す
                 return {"status": "success", "id": user["id"]}
             else:
-                # 🌟 初めてアプリに登録したご新規さんなら、usersテーブルに新しいレコードを作る
-                # （※メール＋パスワード認証の場合、最初はnameが空、またはemailの@より前などになるため、フロントから届いた名前をそのまま入れます）
-                sql = "INSERT INTO users (name, email, firebase_uid) VALUES (%s, %s, %s)"
-                cursor.execute(sql, (data.name, data.email, data.firebase_uid))
+                # 🌟 初めてアプリに登録したご新規さんの場合
+                # MySQLの必須項目である password_hash に空文字 "" を入れてエラーを回避します
+                sql = "INSERT INTO users (name, email, firebase_uid, password_hash) VALUES (%s, %s, %s, %s)"
+                cursor.execute(sql, (data.name, data.email, data.firebase_uid, ""))
                 connection.commit()
                 
                 # 今INSERTしたばかりの自動連番のID（例: 2）を取得して返す
