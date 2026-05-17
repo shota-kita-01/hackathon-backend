@@ -1,9 +1,18 @@
 import os
 import pymysql
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- 1. 画面から届くデータの形（注文票のルール）を定義 ---
 class UserRegister(BaseModel):
