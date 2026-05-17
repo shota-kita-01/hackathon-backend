@@ -74,7 +74,7 @@ def register_user(user_data: UserRegister):
     finally:
         connection.close()
 
-# 【修正版】ユーザー一覧取得 API（新しいテーブル構造に対応）
+# ユーザー一覧取得 API（新しいテーブル構造に対応）
 @app.get("/api/users")
 def get_users():
     connection = get_db_connection()
@@ -88,7 +88,7 @@ def get_users():
         connection.close()
 
 
-# 【新機能】商品出品 API
+# 商品出品 API
 @app.post("/api/items")
 def create_item(item_data: dict):
     # item_data の中身: {"name": "...", "description": "...", "price": 1000, "image_url": "...", "seller_id": 1}
@@ -111,7 +111,7 @@ def create_item(item_data: dict):
     finally:
         connection.close()
 
-# 【新機能】商品一覧取得 API（ホーム画面用）
+# 商品一覧取得 API（ホーム画面用）
 @app.get("/api/items")
 def get_items():
     connection = get_db_connection()
@@ -125,7 +125,7 @@ def get_items():
         connection.close()
 
 
-# 【新機能】商品購入 API
+# 商品購入 API
 @app.post("/api/items/{item_id}/purchase")
 def purchase_item(item_id: int, buyer_data: dict):
     # buyer_data の中身: {"buyer_id": 1} などを想定
@@ -157,6 +157,43 @@ def purchase_item(item_id: int, buyer_data: dict):
             return {"status": "success", "message": "商品の購入が完了しました！"}
     except Exception as e:
         connection.rollback() # 万が一途中でエラーが起きたら、中途半端な状態にならないよう元に戻す
+        raise e
+    finally:
+        connection.close()
+
+
+
+# フロントから届くログインデータを受け止めるための型（Pydanticモデル）
+class LoginData(BaseModel):
+    firebase_uid: str
+    name: str
+    email: str
+
+# Firebase認証連動・ログインAPI
+@app.post("/api/auth/login")
+def auth_login(data: LoginData):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            # 1. すでにこのFirebase UIDを持つユーザーがDBにいるかチェック
+            cursor.execute("SELECT id FROM users WHERE firebase_uid = %s", (data.firebase_uid,))
+            user = cursor.fetchone()
+            
+            if user:
+                # 🌟 すでに登録済みのリピーターなら、MySQLの整数ID（例: 1）をそのまま返す
+                return {"status": "success", "id": user["id"]}
+            else:
+                # 🌟 初めてアプリに登録したご新規さんなら、usersテーブルに新しいレコードを作る
+                # （※メール＋パスワード認証の場合、最初はnameが空、またはemailの@より前などになるため、フロントから届いた名前をそのまま入れます）
+                sql = "INSERT INTO users (name, email, firebase_uid) VALUES (%s, %s, %s)"
+                cursor.execute(sql, (data.name, data.email, data.firebase_uid))
+                connection.commit()
+                
+                # 今INSERTしたばかりの自動連番のID（例: 2）を取得して返す
+                new_id = cursor.lastrowid
+                return {"status": "success", "id": new_id}
+    except Exception as e:
+        connection.rollback()
         raise e
     finally:
         connection.close()
