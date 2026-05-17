@@ -114,3 +114,40 @@ def get_items():
             return result
     finally:
         connection.close()
+
+
+# 【新機能】商品購入 API
+@app.post("/api/items/{item_id}/purchase")
+def purchase_item(item_id: int, buyer_data: dict):
+    # buyer_data の中身: {"buyer_id": 1} などを想定
+    buyer_id = buyer_data.get("buyer_id")
+    if not buyer_id:
+        raise HTTPException(status_code=400, detail="購入者のID（buyer_id）が必要です")
+        
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            # 1. 商品がまだ存在し、かつ売り切れていないかチェック
+            cursor.execute("SELECT status FROM items WHERE id = %s", (item_id,))
+            item = cursor.fetchone()
+            if not item:
+                raise HTTPException(status_code=404, detail="商品が見つかりません")
+            if item["status"] == "sold_out":
+                raise HTTPException(status_code=400, detail="この商品は既に売り切れています")
+            
+            # 2. 購入履歴（purchases）テーブルに記録を追加
+            sql_purchase = "INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)"
+            cursor.execute(sql_purchase, (item_id, buyer_id))
+            
+            # 3. 商品（items）テーブルのステータスを 'sold_out' に更新
+            sql_update_item = "UPDATE items SET status = 'sold_out' WHERE id = %s"
+            cursor.execute(sql_update_item, (item_id,))
+            
+            # 両方の処理が成功したら確定（コミット）する
+            connection.commit()
+            return {"status": "success", "message": "商品の購入が完了しました！"}
+    except Exception as e:
+        connection.rollback() # 万が一途中でエラーが起きたら、中途半端な状態にならないよう元に戻す
+        raise e
+    finally:
+        connection.close()
