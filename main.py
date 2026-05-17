@@ -77,3 +77,40 @@ def get_users():
             return result
     finally:
         connection.close()
+
+
+# 【新機能】商品出品 API
+@app.post("/api/items")
+def create_item(item_data: dict):
+    # item_data の中身: {"name": "...", "description": "...", "price": 1000, "image_url": "...", "seller_id": 1}
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                INSERT INTO items (name, description, price, image_url, seller_id, status)
+                VALUES (%s, %s, %s, %s, %s, 'on_sale')
+            """
+            cursor.execute(sql, (
+                item_data.get("name"),
+                item_data.get("description"),
+                item_data.get("price"),
+                item_data.get("image_url"),
+                item_data.get("seller_id")
+            ))
+            connection.commit()
+            return {"status": "success", "message": "商品が出品されました！"}
+    finally:
+        connection.close()
+
+# 【新機能】商品一覧取得 API（ホーム画面用）
+@app.get("/api/items")
+def get_items():
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            # まだ売れ残っている（on_sale）の商品を最新順に取得する
+            cursor.execute("SELECT id, name, description, price, image_url, seller_id FROM items WHERE status = 'on_sale' ORDER BY id DESC")
+            result = cursor.fetchall()
+            return result
+    finally:
+        connection.close()
