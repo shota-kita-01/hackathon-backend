@@ -209,6 +209,7 @@ def import_merrec_to_cloud_sql():
         
         with connection.cursor() as cursor:
             cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
+            cursor.execute("DELETE FROM purchases;")
             cursor.execute("DELETE FROM items WHERE seller_id = 1")
 
             img_idx = 0
