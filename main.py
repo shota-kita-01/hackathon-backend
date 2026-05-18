@@ -228,67 +228,73 @@ def auth_login(data: LoginData):
 
 
 
-# 🚀 【完全安全版】データが存在すればスキップする、絶対に壊れないインポートAPI
+# 🚀 【タイムライン映え対策・日本円換算版】メルカリデータインポートAPI
 @app.get("/api/admin/import-merrec")
 def import_merrec_to_cloud_sql():
-    print("⏳ クラウド上でデータベースの状態を確認中...")
+    print("⏳ クラウド上でデータを加工中...")
     
     try:
+        # 🌟 ハッカソン用の超オシャレな高画質画像コレクション（Unsplashから厳選）
+        preset_images = [
+            "https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?w=600&auto=format&fit=crop",  # ジュエリー
+            "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=600&auto=format&fit=crop",  # 洋服
+            "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=600&auto=format&fit=crop",  # スニーカー
+            "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=600&auto=format&fit=crop",  # ガジェット/時計
+            "https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?w=600&auto=format&fit=crop",  # ヘッドホン
+            "https://images.unsplash.com/photo-1544816155-12df9643f363?w=600&auto=format&fit=crop",  # バッグ
+            "https://images.unsplash.com/photo-1608231387042-66d1773070a5?w=600&auto=format&fit=crop"   # 靴
+        ]
+
+        url = "https://huggingface.co/datasets/mercari-us/merrec/resolve/main/20230501/000000000000.parquet"
+        df = pd.read_parquet(url, engine="pyarrow")
+        df_sampled = df.head(10000)
+        unique_items = df_sampled.drop_duplicates(subset=['item_id']).copy()
+
         connection = get_db_connection()
         inserted_count = 0
         
         with connection.cursor() as cursor:
-            # 🛑 【ここが新しい戦略！】
-            # すでに初期データ（seller_id = 1）の商品が登録されているか数を数える
-            cursor.execute("SELECT COUNT(*) FROM items WHERE seller_id = 1")
-            existing_count = cursor.fetchone()[0]
-            
-            # すでにデータが存在するなら、ダブらせないためにここで即座に「正常終了」させる！
-            if existing_count > 0:
-                connection.close()
-                return {
-                    "status": "success",
-                    "message": f"ℹ️ すでに本物のメルカリデータが {existing_count} 件データベースに存在するため、安全のためにインポートをスキップしました。すでにタイムラインに表示可能な状態です！"
-                }
+            # 🔓 一時的に外部キーをオフにして古い殺伐データを全消去
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
+            cursor.execute("DELETE FROM items WHERE seller_id = 1")
 
-            # 💡 データベースが空の場合のみ、重たいインポート処理を動かす
-            url = "https://huggingface.co/datasets/mercari-us/merrec/resolve/main/20230501/000000000000.parquet"
-            df = pd.read_parquet(url, engine="pyarrow")
-            df_sampled = df.head(10000)
-            unique_items = df_sampled.drop_duplicates(subset=['item_id']).copy()
-
+            img_idx = 0
             for _, row in unique_items.head(100).iterrows():
-                brand = row['brand_name'] if row['brand_name'] else "ノーブランド"
-                c2 = row['c2_name'] if row['c2_name'] else ""
+                # 1. PandasのNaN（nan文字列化）を完全に防御
+                raw_brand = str(row['brand_name']).strip() if pd.notna(row['brand_name']) else ""
+                brand = raw_brand if raw_brand and raw_brand.lower() != "nan" else "ノーブランド"
+                
+                c2 = row['c2_name'] if pd.notna(row['c2_name']) else ""
                 description = f"【カテゴリ】{row['c0_name']} > {row['c1_name']} > {c2}\n【ブランド】{brand}\n【商品の状態】{row['item_condition_name']}"
                 
                 sql = """
                     INSERT INTO items (name, description, price, image_url, seller_id, status)
                     VALUES (%s, %s, %s, %s, %s, %s)
                 """
-                price = int(row['price']) if row['price'] and row['price'] > 0 else 1500
+                
+                # 2. ドル建ての価格を日本円（1ドル＝150円換算）にしてリアルに！
+                raw_price = row['price'] if pd.notna(row['price']) else 10
+                price = int(raw_price * 150) if raw_price > 0 else 1500
+                
+                # 3. ダミー画像から、上で定義した綺麗な画像へ順番に割り当て
+                image_url = preset_images[img_idx % len(preset_images)]
+                img_idx += 1
                 
                 cursor.execute(sql, (
                     row['name'],
                     description,
                     price,
-                    "https://example.com/images/default.jpg",
+                    image_url,
                     1,
                     "on_sale"
                 ))
                 inserted_count += 1
                 
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
             connection.commit()
             
         connection.close()
-        return {
-            "status": "success", 
-            "message": f"🎉 初回インポート大成功！最新のメルカリデータ {inserted_count} 件を綺麗にインポートしました！"
-        }
+        return {"status": "success", "message": f"🎉 タイムライン映え対策完了！{inserted_count} 件をインポート！"}
         
     except Exception as e:
-        try:
-            connection.close()
-        except:
-            pass
         return {"status": "error", "message": str(e)}
