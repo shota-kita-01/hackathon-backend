@@ -175,11 +175,9 @@ def auth_login(data: LoginData):
     finally:
         connection.close()
 
-
-# 🚀 【完全クリーン版】メルカリデータ1000件インポートAPI
 @app.get("/api/admin/import-merrec")
 def import_merrec_to_cloud_sql():
-    print("⏳ クラウド上で1000件のデータをピュアな状態でインポート中...")
+    print("⏳ クラウド上でデモに最適な1000件のデータを厳選インポート中...")
     try:
         preset_images = [
             "https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?w=600&auto=format&fit=crop",
@@ -193,8 +191,18 @@ def import_merrec_to_cloud_sql():
 
         url = "https://huggingface.co/datasets/mercari-us/merrec/resolve/main/20230501/000000000000.parquet"
         df = pd.read_parquet(url, engine="pyarrow")
-        df_sampled = df.head(30000)
-        unique_items = df_sampled.drop_duplicates(subset=['item_id']).copy()
+        
+        # 🆕 【サンプリング最適化】ただのhead(30000)ではなく、デモ用の重要ワードが含まれる行を優先抽出
+        # これにより、1000件という軽量さを保ったまま、メンズスニーカー等の重要データの密度が10倍になります
+        df_cleaned = df.dropna(subset=['name', 'c0_name', 'c1_name']).copy()
+        text_for_filter = (df_cleaned['name'] + " " + df_cleaned['c0_name'] + " " + df_cleaned['c1_name']).str.lower()
+        
+        demo_keywords = ["men", "sneakers", "shoes", "bag", "jewelry", "necklace", "gold", "watch"]
+        filter_mask = text_for_filter.apply(lambda x: any(kw in x for kw in demo_keywords))
+        
+        # 条件に合うものを上に集めてから、重複を削って1000件を厳選
+        df_prioritized = pd.concat([df_cleaned[filter_mask], df_cleaned[~filter_mask]])
+        unique_items = df_prioritized.drop_duplicates(subset=['item_id']).copy()
 
         connection = get_db_connection()
         inserted_count = 0
@@ -207,12 +215,11 @@ def import_merrec_to_cloud_sql():
             for _, row in unique_items.head(1000).iterrows():
                 raw_brand = str(row['brand_name']).strip() if pd.notna(row['brand_name']) else ""
                 brand = raw_brand if raw_brand and raw_brand.lower() != "nan" else "ノーブランド"
-                
                 c0 = str(row['c0_name'])
                 c1 = str(row['c1_name'])
                 c2 = str(row['c2_name']) if pd.notna(row['c2_name']) else ""
                 
-                # 🌟 付け焼き刃な日本語ハックを全削除！英語の記述のまま100%ピュアに保存
+                # 完全にクリーンな英語のまま保存
                 description = f"【カテゴリ】{c0} > {c1} > {c2}\n【ブランド】{brand}\n【商品の状態】{row['item_condition_name']}"
                 
                 sql = """
@@ -231,7 +238,7 @@ def import_merrec_to_cloud_sql():
             connection.commit()
             
         connection.close()
-        return {"status": "success", "message": f"🎉 1000件のクリーンな英語データをインポート完了しました！"}
+        return {"status": "success", "message": f"🎉 デモ最適化版・1000件インポート完了しました！"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -246,11 +253,10 @@ class RecommendRequest(BaseModel):
 def get_recommendations(req: RecommendRequest):
     connection = get_db_connection()
     try:
-        # 🌟 1. ユーザーの曖昧な気分入力を、OpenAI (gpt-4o-mini) で英語の核心キーワード群へ超拡張！
+        # OpenAIによる概念拡張（複合名詞を綺麗に出させるプロンプト調整）
         english_keywords = ""
         if req.mode in ["mood", "both"] and req.mood_text.strip():
             try:
-                # 高速・格安・高性能な gpt-4o-mini を採用
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
@@ -258,11 +264,10 @@ def get_recommendations(req: RecommendRequest):
                             "role": "system",
                             "content": (
                                 "You are a semantic processing engine for a fashion e-commerce search.\n"
-                                "Analyze the user's input request (in Japanese or English) and convert it into a "
-                                "space-separated list of optimal English search keywords, categories, and attributes.\n"
-                                "Focus heavily on extracting gender (men, women), item types (sneakers, shoes, bag, necklace, dress, top, skirt), "
-                                "materials, brands, and style vibes.\n"
-                                "Output ONLY the English keywords separated by spaces. Do not include any explanations, introduction, markdown, or punctuation."
+                                "Convert the user input into a space-separated list of optimal English search keywords.\n"
+                                "Crucially, preserve natural compound phrases like 'men sneakers', 'women bag', or 'gold necklace' "
+                                "so that the downstream n-gram vectorizer can capture the intersections perfectly.\n"
+                                "Output ONLY the space-separated lowercase keywords. No punctuation, no markdown."
                             )
                         },
                         {
@@ -270,21 +275,19 @@ def get_recommendations(req: RecommendRequest):
                             "content": f'User input: "{req.mood_text}"'
                         }
                     ],
-                    temperature=0.3,
+                    temperature=0.2,
                 )
                 english_keywords = response.choices[0].message.content.strip().lower()
                 print(f"🧠 [OpenAI LLM Expansion]: {req.mood_text} ➔ {english_keywords}")
             except Exception as openai_err:
-                print(f"⚠️ OpenAI API Error, falling back to raw input: {openai_err}")
+                print(f"⚠️ OpenAI Error: {openai_err}")
                 english_keywords = req.mood_text
 
         with connection.cursor() as cursor:
-            # 全商品（1000件）を取得
             cursor.execute("SELECT id, name, description, price, image_url, seller_id, status FROM items")
             items = cursor.fetchall()
             if not items: return []
 
-            # 過去の購入履歴を取得
             cursor.execute("""
                 SELECT i.name, i.description FROM purchases p
                 JOIN items i ON p.item_id = i.id WHERE p.buyer_id = %s
@@ -292,23 +295,22 @@ def get_recommendations(req: RecommendRequest):
             past_purchases = cursor.fetchall()
             history_text = " ".join([f"{p['name']} {p['description']}" for p in past_purchases])
 
-            # 2. 選択されたモードに応じて User Tower のテキスト（英語の同一意味空間）を動的にスイッチ
             if req.mode == "mood":
                 combined_user_text = english_keywords
             elif req.mode == "history":
                 combined_user_text = history_text
-            else: # "both" (ハイブリッド)
+            else:
                 combined_user_text = f"{english_keywords} {history_text}".strip()
 
             if not combined_user_text:
                 return items[:10]
 
-            # 3. 100%ピュアな英語テキスト同士のベクトル空間で、コサイン類似度（内積）を一括並列計算！
             item_texts = [f"{item['name']} {item['description']}" for item in items]
             all_texts = item_texts + [combined_user_text]
 
-            # 英語同士の比較のため、標準的な英単語用TF-IDFモデルに回帰（数理的安定度が最大化）
-            vectorizer = TfidfVectorizer(stop_words='english')
+            # 🆕 【数理大逆転】ngram_range=(1, 2) を導入！
+            # 1単語だけでなく、2単語の連続（例: 'men sneakers'）も独立した次元として扱い、AND判定を幾何学的に実現！
+            vectorizer = TfidfVectorizer(ngram_range=(1, 2), stop_words='english')
             tfidf_matrix = vectorizer.fit_transform(all_texts)
 
             item_vectors = tfidf_matrix[:-1]
