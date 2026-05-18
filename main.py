@@ -69,7 +69,6 @@ def register_user(user_data: UserRegister):
                 raise HTTPException(status_code=400, detail="このメールアドレスは既に登録されています")
             
             # 新しいユーザーをデータベースに保存
-            # ※ハッカソンの初期実装のため、一旦プレーンテキストで保存（後からハッシュ化にトッピング可能！）
             sql = "INSERT INTO users (name, email, password_hash) VALUES (%s, %s, %s)"
             cursor.execute(sql, (user_data.name, user_data.email, user_data.password))
             connection.commit() # データベースの変更を確定させる
@@ -84,7 +83,6 @@ def get_users():
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 新しく作った「users」テーブルからデータを取ってくる
             cursor.execute("SELECT id, name, email FROM users")
             result = cursor.fetchall()
             return result
@@ -95,7 +93,6 @@ def get_users():
 # 商品出品 API
 @app.post("/api/items")
 def create_item(item_data: dict):
-    # item_data の中身: {"name": "...", "description": "...", "price": 1000, "image_url": "...", "seller_id": 1}
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -121,10 +118,6 @@ def get_items():
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 🌟 SQLの解説：
-            # 1. items（i）と users（u）を seller_id をキーにして左結合（LEFT JOIN）します。
-            # 2. これにより、出品者の名前（u.name）を「seller_name」として一緒に取得できます。
-            # 3. WHERE文を外し、売り切れ（sold_out）の商品もタイムラインに届くようにします。
             sql = """
                 SELECT 
                     i.id, 
@@ -149,7 +142,6 @@ def get_items():
 # 商品購入 API
 @app.post("/api/items/{item_id}/purchase")
 def purchase_item(item_id: int, buyer_data: dict):
-    # buyer_data の中身: {"buyer_id": 1} などを想定
     buyer_id = buyer_data.get("buyer_id")
     if not buyer_id:
         raise HTTPException(status_code=400, detail="購入者のID（buyer_id）が必要です")
@@ -157,7 +149,6 @@ def purchase_item(item_id: int, buyer_data: dict):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 1. 商品がまだ存在し、かつ売り切れていないかチェック
             cursor.execute("SELECT status FROM items WHERE id = %s", (item_id,))
             item = cursor.fetchone()
             if not item:
@@ -165,23 +156,19 @@ def purchase_item(item_id: int, buyer_data: dict):
             if item["status"] == "sold_out":
                 raise HTTPException(status_code=400, detail="この商品は既に売り切れています")
             
-            # 2. 購入履歴（purchases）テーブルに記録を追加
             sql_purchase = "INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)"
             cursor.execute(sql_purchase, (item_id, buyer_id))
             
-            # 3. 商品（items）テーブルのステータスを 'sold_out' に更新
             sql_update_item = "UPDATE items SET status = 'sold_out' WHERE id = %s"
             cursor.execute(sql_update_item, (item_id,))
             
-            # 両方の処理が成功したら確定（コミット）する
             connection.commit()
             return {"status": "success", "message": "商品の購入が完了しました！"}
     except Exception as e:
-        connection.rollback() # 万が一途中でエラーが起きたら、中途半端な状態にならないよう元に戻す
+        connection.rollback()
         raise e
     finally:
         connection.close()
-
 
 
 # フロントから届くログインデータを受け止めるための型（Pydanticモデル）
@@ -190,33 +177,27 @@ class LoginData(BaseModel):
     name: str
     email: str
 
-# Firebase認証連動・ログインAPI（重複ユーザー自動救済版）
+# Firebase認証連動・ログインAPI
 @app.post("/api/auth/login")
 def auth_login(data: LoginData):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 1. まずはFirebase UIDでチェック（通常のリピーター）
             cursor.execute("SELECT id FROM users WHERE firebase_uid = %s", (data.firebase_uid,))
             user = cursor.fetchone()
             
             if user:
                 return {"status": "success", "id": user["id"]}
             
-            # 2. UIDは新規だが、同じメールアドレスが既にDBにあるかチェック
             cursor.execute("SELECT id FROM users WHERE email = %s", (data.email,))
             existing_user = cursor.fetchone()
             
             if existing_user:
-                # Firebase側を全削除してUIDが変わってしまったケースなので、
-                # MySQL側のレコードを新しい最新のUIDで上書き更新（アップデート）する！
                 update_sql = "UPDATE users SET firebase_uid = %s WHERE id = %s"
                 cursor.execute(update_sql, (data.firebase_uid, existing_user["id"]))
                 connection.commit()
-                
                 return {"status": "success", "id": existing_user["id"]}
             
-            # 3. 完全なご新規さんの場合
             sql = "INSERT INTO users (name, email, firebase_uid, password_hash) VALUES (%s, %s, %s, %s)"
             cursor.execute(sql, (data.name, data.email, data.firebase_uid, ""))
             connection.commit()
@@ -230,98 +211,105 @@ def auth_login(data: LoginData):
         connection.close()
 
 
-
-# 🚀 メルカリデータインポートAPI
+# 🚀 【1000件大増量・日本語検索ハック対応版】メルカリデータインポートAPI
 @app.get("/api/admin/import-merrec")
 def import_merrec_to_cloud_sql():
-    print("⏳ クラウド上でデータを加工中...")
+    print("⏳ クラウド上で1000件のデータを高度加工中...")
     
     try:
-        # 🌟 ハッカソン用の超オシャレな高画質画像コレクション（Unsplashから厳選）
         preset_images = [
-            "https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?w=600&auto=format&fit=crop",  # ジュエリー
-            "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=600&auto=format&fit=crop",  # 洋服
-            "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=600&auto=format&fit=crop",  # スニーカー
-            "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=600&auto=format&fit=crop",  # ガジェット/時計
-            "https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?w=600&auto=format&fit=crop",  # ヘッドホン
-            "https://images.unsplash.com/photo-1544816155-12df9643f363?w=600&auto=format&fit=crop",  # バッグ
-            "https://images.unsplash.com/photo-1608231387042-66d1773070a5?w=600&auto=format&fit=crop"   # 靴
+            "https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?w=600&auto=format&fit=crop",
+            "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=600&auto=format&fit=crop",
+            "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=600&auto=format&fit=crop",
+            "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=600&auto=format&fit=crop",
+            "https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?w=600&auto=format&fit=crop",
+            "https://images.unsplash.com/photo-1544816155-12df9643f363?w=600&auto=format&fit=crop",
+            "https://images.unsplash.com/photo-1608231387042-66d1773070a5?w=600&auto=format&fit=crop"
         ]
 
         url = "https://huggingface.co/datasets/mercari-us/merrec/resolve/main/20230501/000000000000.parquet"
         df = pd.read_parquet(url, engine="pyarrow")
-        df_sampled = df.head(10000)
+        df_sampled = df.head(30000) # 1000件のユニークデータを確保するため多めにロード
         unique_items = df_sampled.drop_duplicates(subset=['item_id']).copy()
 
         connection = get_db_connection()
         inserted_count = 0
         
         with connection.cursor() as cursor:
-            # 🔓 一時的に外部キーをオフにして古い殺伐データを全消去
             cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
             cursor.execute("DELETE FROM items WHERE seller_id = 1")
 
             img_idx = 0
-            for _, row in unique_items.head(100).iterrows():
-                # 1. PandasのNaN（nan文字列化）を完全に防御
+            # 🌟 100件から1000件の大ボリュームへ増量！
+            for _, row in unique_items.head(1000).iterrows():
                 raw_brand = str(row['brand_name']).strip() if pd.notna(row['brand_name']) else ""
                 brand = raw_brand if raw_brand and raw_brand.lower() != "nan" else "ノーブランド"
                 
+                c0 = str(row['c0_name'])
+                c1 = str(row['c1_name'])
                 c2 = row['c2_name'] if pd.notna(row['c2_name']) else ""
-                description = f"【カテゴリ】{row['c0_name']} > {row['c1_name']} > {c2}\n【ブランド】{brand}\n【商品の状態】{row['item_condition_name']}"
+                
+                # 🆕 【日本語化ハック】英語テキストから日本語の検索用ハッシュタグを自動錬成
+                ja_tags = []
+                text_to_scan = f"{row['name']} {c0} {c1} {c2} {brand}".lower()
+                if "gold" in text_to_scan: ja_tags.append("#ゴールド #金")
+                if "silver" in text_to_scan: ja_tags.append("#シルバー #銀")
+                if "necklace" in text_to_scan: ja_tags.append("#ネックレス #首飾り")
+                if "ring" in text_to_scan: ja_tags.append("#リング #指輪")
+                if "earring" in text_to_scan: ja_tags.append("#イヤリング #ピアス")
+                if "bag" in text_to_scan or "tote" in text_to_scan: ja_tags.append("#バッグ #カバン")
+                if "shoes" in text_to_scan or "sneaker" in text_to_scan: ja_tags.append("#スニーカー #靴")
+                if "women" in text_to_scan: ja_tags.append("#レディース #女性用")
+                if "men" in text_to_scan: ja_tags.append("#メンズ #男性用")
+                if "vintage" in text_to_scan: ja_tags.append("#ビンテージ #古着")
+                
+                ja_tags_str = " ".join(ja_tags)
+                description = f"【カテゴリ】{c0} > {c1} > {c2}\n【ブランド】{brand}\n【商品の状態】{row['item_condition_name']}\n{ja_tags_str}"
                 
                 sql = """
                     INSERT INTO items (name, description, price, image_url, seller_id, status)
                     VALUES (%s, %s, %s, %s, %s, %s)
                 """
                 
-                # 2. ドル建ての価格を日本円（1ドル＝150円換算）にしてリアルに！
                 raw_price = row['price'] if pd.notna(row['price']) else 10
                 price = int(raw_price * 150) if raw_price > 0 else 1500
                 
-                # 3. ダミー画像から、上で定義した綺麗な画像へ順番に割り当て
                 image_url = preset_images[img_idx % len(preset_images)]
                 img_idx += 1
                 
-                cursor.execute(sql, (
-                    row['name'],
-                    description,
-                    price,
-                    image_url,
-                    1,
-                    "on_sale"
-                ))
+                cursor.execute(sql, (row['name'], description, price, image_url, 1, "on_sale"))
                 inserted_count += 1
                 
             cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
             connection.commit()
             
         connection.close()
-        return {"status": "success", "message": f"🎉 タイムライン映え対策完了！{inserted_count} 件をインポート！"}
+        return {"status": "success", "message": f"🎉 日本語対応ハック＆1000件の大増量インポートが完了しました！"}
         
     except Exception as e:
         return {"status": "error", "message": str(e)}
     
 
-    # フロントエンドから届く「気分」や「ユーザーID」を受け取る型
+# 🆕 フロントエンドの「モード選択トグル」を乗せる注文票ルール
 class RecommendRequest(BaseModel):
     user_id: int
-    mood_text: str # 例: "I am looking for shiny gold luxury jewelry for a wedding party"
+    mood_text: str
+    mode: str # "mood" (気分重視), "history" (過去重視), "both" (ミックス)
 
-# 🧠 【Two-Tower風】気分・履歴・関連を網羅してひたすら計算する推薦API
+# 🧠 【Two-Tower進化版】気分・履歴をフロント側から自在に制御する推薦API
 @app.post("/api/recommend")
 def get_recommendations(req: RecommendRequest):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 1. 全商品データをDBから取得（Item Towerの入力元）
+            # 1. 全商品（1000件）を取得
             cursor.execute("SELECT id, name, description, price, image_url, seller_id, status FROM items")
             items = cursor.fetchall()
             
             if not items:
                 return []
 
-            # 2. ユーザーの「過去の購入履歴」を取得してUser Towerの表現力を強化！
+            # 2. 過去の購入履歴を取得
             cursor.execute("""
                 SELECT i.name, i.description 
                 FROM purchases p
@@ -329,39 +317,39 @@ def get_recommendations(req: RecommendRequest):
                 WHERE p.buyer_id = %s
             """, (req.user_id,))
             past_purchases = cursor.fetchall()
-            
-            # 過去の購入履歴テキストを合体させる
-            history_text = ""
-            for p in past_purchases:
-                history_text += f" {p['name']} {p['description']}"
+            history_text = " ".join([f"{p['name']} {p['description']}" for p in past_purchases])
 
-            # 3. User Towerのベクトル構築
-            # 「今の気分」に「過去の履歴」を少しブレンドして、ユーザーの総合的な興味を表現
-            combined_user_text = f"{req.mood_text} {history_text}".strip()
+            # 🆕 3. フロントからの指示（mode）に応じて計算元のUserテキストを数理スイッチ！
+            if req.mode == "mood":
+                combined_user_text = req.mood_text
+            elif req.mode == "history":
+                combined_user_text = history_text
+            else: # "both" (ミックス)
+                combined_user_text = f"{req.mood_text} {history_text}".strip()
 
-            # 4. アイテムとユーザーのテキストを一括で高次元ベクトル空間へマッピング
+            # もし気分も履歴も完全に空っぽな場合は、取り急ぎ先頭10件を返す
+            if not combined_user_text:
+                return items[:10]
+
+            # 4. 高次元ベクトル空間モデルの構築
             item_texts = [f"{item['name']} {item['description']}" for item in items]
             all_texts = item_texts + [combined_user_text]
 
-            # TF-IDFによる高次元ベクトル化（英語の単語の重要度を数理的に算出）
-            vectorizer = TfidfVectorizer(stop_words='english')
+            # 🆕 日本語のハッシュタグ（漢字・カタカナ1文字から）も英語も両方数理的に分割できるよう正規表現パターンを最適化！
+            vectorizer = TfidfVectorizer(token_pattern=r'(?u)\b\w+\b', stop_words='english')
             tfidf_matrix = vectorizer.fit_transform(all_texts)
 
-            # 行列から Itemベクトル群 と Userベクトル を分離
             item_vectors = tfidf_matrix[:-1]
             user_vector = tfidf_matrix[-1]
 
-            # 5. 【ひたすら計算】すべての商品とユーザーベクトルのコサイン類似度（内積）を一撃で計算！
+            # 5. 行列の並列内積計算によるコサイン類似度一括算出
             similarities = cosine_similarity(user_vector, item_vectors).flatten()
 
-            # 6. 計算結果（スコア）を各商品に紐付け
+            # 6. スコア付与と高効率ソート
             for idx, item in enumerate(items):
                 item["score"] = float(similarities[idx])
 
-            # 7. スコアが高い順（類似度が高い順）にソート
             recommended_items = sorted(items, key=lambda x: x["score"], reverse=True)
-
-            # 上位10件を推薦結果として返す
             return recommended_items[:10]
 
     except Exception as e:
