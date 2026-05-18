@@ -228,30 +228,35 @@ def auth_login(data: LoginData):
 
 
 
-# 🚀 【安全装置・制約回避付き】メルカリの初期データを Cloud SQL に流し込む裏口 API
+# 🚀 【完全安全版】データが存在すればスキップする、絶対に壊れないインポートAPI
 @app.get("/api/admin/import-merrec")
 def import_merrec_to_cloud_sql():
-    print("⏳ クラウド上で MerRec データセットから商品データを抽出中...")
+    print("⏳ クラウド上でデータベースの状態を確認中...")
     
     try:
-        url = "https://huggingface.co/datasets/mercari-us/merrec/resolve/main/20230501/000000000000.parquet"
-        df = pd.read_parquet(url, engine="pyarrow")
-        df_sampled = df.head(10000)
-        unique_items = df_sampled.drop_duplicates(subset=['item_id']).copy()
-        
         connection = get_db_connection()
         inserted_count = 0
         
         with connection.cursor() as cursor:
-            # 🔓 【ハッカソン必殺技】一時的に外部キー制約を無効化（購入履歴があっても削除・上書き可能にする）
-            cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
-            print("🔓 外部キーチェックを一時的にオフにしました。")
+            # 🛑 【ここが新しい戦略！】
+            # すでに初期データ（seller_id = 1）の商品が登録されているか数を数える
+            cursor.execute("SELECT COUNT(*) FROM items WHERE seller_id = 1")
+            existing_count = cursor.fetchone()[0]
+            
+            # すでにデータが存在するなら、ダブらせないためにここで即座に「正常終了」させる！
+            if existing_count > 0:
+                connection.close()
+                return {
+                    "status": "success",
+                    "message": f"ℹ️ すでに本物のメルカリデータが {existing_count} 件データベースに存在するため、安全のためにインポートをスキップしました。すでにタイムラインに表示可能な状態です！"
+                }
 
-            # 重複を防ぐため、まずは初期データ（seller_id = 1）の商品を一度綺麗に削除する
-            cursor.execute("DELETE FROM items WHERE seller_id = 1")
-            print("🧹 古い初期データを削除しました。")
+            # 💡 データベースが空の場合のみ、重たいインポート処理を動かす
+            url = "https://huggingface.co/datasets/mercari-us/merrec/resolve/main/20230501/000000000000.parquet"
+            df = pd.read_parquet(url, engine="pyarrow")
+            df_sampled = df.head(10000)
+            unique_items = df_sampled.drop_duplicates(subset=['item_id']).copy()
 
-            # 新鮮な100件を綺麗に流し込む
             for _, row in unique_items.head(100).iterrows():
                 brand = row['brand_name'] if row['brand_name'] else "ノーブランド"
                 c2 = row['c2_name'] if row['c2_name'] else ""
@@ -268,30 +273,21 @@ def import_merrec_to_cloud_sql():
                     description,
                     price,
                     "https://example.com/images/default.jpg",
-                    1, # 初期データ用の仮の seller_id
+                    1,
                     "on_sale"
                 ))
                 inserted_count += 1
-            
-            # 🔒 安全装置を元の状態（有効）に戻す
-            cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
-            print("🔒 外部キーチェックを元に戻しました。")
-            
-            # 変更を確定
+                
             connection.commit()
             
         connection.close()
-        
         return {
             "status": "success", 
-            "message": f"🎉 重複を排除し、最新のメルカリデータ {inserted_count} 件を綺麗にインポートしました！"
+            "message": f"🎉 初回インポート大成功！最新のメルカリデータ {inserted_count} 件を綺麗にインポートしました！"
         }
         
     except Exception as e:
-        # 万が一エラーが起きた場合も、安全のためにチェックを元に戻す保険
         try:
-            with connection.cursor() as cursor:
-                cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
             connection.close()
         except:
             pass
