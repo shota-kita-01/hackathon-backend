@@ -7,7 +7,6 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-# 🆕 OpenAIライブラリのインポート
 from openai import OpenAI
 
 app = FastAPI()
@@ -20,8 +19,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🧠 OpenAIクライアントの初期設定
-# Cloud Runの環境変数に「OPENAI_API_KEY」をセットしておくと自動で読み込まれます
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class UserRegister(BaseModel):
@@ -175,10 +172,73 @@ def auth_login(data: LoginData):
     finally:
         connection.close()
 
+
+# 🆕 【新機能】① いいねの登録・解除を1つでこなすトグルAPI
+@app.post("/api/items/{item_id}/like")
+def toggle_like(item_id: int, data: dict):
+    user_id = data.get("user_id")
+    if not user_id: raise HTTPException(status_code=400, detail="user_idが必要です")
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM likes WHERE user_id = %s AND item_id = %s", (user_id, item_id))
+            existing_like = cursor.fetchone()
+            if existing_like:
+                cursor.execute("DELETE FROM likes WHERE user_id = %s AND item_id = %s", (user_id, item_id))
+                like_status = "unliked"
+            else:
+                cursor.execute("INSERT INTO likes (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
+                like_status = "liked"
+            connection.commit()
+            return {"status": "success", "like_status": like_status}
+    finally:
+        connection.close()
+
+# 🆕 【新機能】② 特定のユーザーが「いいね」している商品一覧を取得するAPI（履歴確認用）
+@app.get("/api/users/{user_id}/likes")
+def get_user_likes(user_id: int):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                SELECT i.*, u.name AS seller_name, TRUE AS is_liked
+                FROM likes l
+                JOIN items i ON l.item_id = i.id
+                LEFT JOIN users u ON i.seller_id = u.id
+                WHERE l.user_id = %s ORDER BY l.created_at DESC
+            """
+            cursor.execute(sql, (user_id,))
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+# 🆕 【新機能】③ 商品詳細を開いた時の「閲覧履歴」を記録するAPI
+@app.post("/api/items/{item_id}/view")
+def record_item_view(item_id: int, data: dict):
+    user_id = data.get("user_id")
+    if not user_id: raise HTTPException(status_code=400, detail="user_idが必要です")
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("INSERT INTO item_views (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
+            connection.commit()
+            return {"status": "success"}
+    finally:
+        connection.close()
+
+
 @app.get("/api/admin/import-merrec")
 def import_merrec_to_cloud_sql():
-    print("⏳ クラウド上でデモに最適な1000件のデータを厳選インポート中...")
+    print("⏳ クラウド上で1000件のデータを検証中...")
     try:
+        connection = get_db_connection()
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) AS cnt FROM items")
+            row_count = cursor.fetchone()
+            if row_count and row_count["cnt"] >= 1000:
+                connection.close()
+                return {"status": "success", "message": "💡 すでにデータが存在するためインポートをスキップしました。"}
+
         preset_images = [
             "https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?w=600&auto=format&fit=crop",
             "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=600&auto=format&fit=crop",
@@ -192,25 +252,19 @@ def import_merrec_to_cloud_sql():
         url = "https://huggingface.co/datasets/mercari-us/merrec/resolve/main/20230501/000000000000.parquet"
         df = pd.read_parquet(url, engine="pyarrow")
         
-        # 🆕 【サンプリング最適化】ただのhead(30000)ではなく、デモ用の重要ワードが含まれる行を優先抽出
-        # これにより、1000件という軽量さを保ったまま、メンズスニーカー等の重要データの密度が10倍になります
         df_cleaned = df.dropna(subset=['name', 'c0_name', 'c1_name']).copy()
         text_for_filter = (df_cleaned['name'] + " " + df_cleaned['c0_name'] + " " + df_cleaned['c1_name']).str.lower()
-        
         demo_keywords = ["men", "sneakers", "shoes", "bag", "jewelry", "necklace", "gold", "watch"]
         filter_mask = text_for_filter.apply(lambda x: any(kw in x for kw in demo_keywords))
         
-        # 条件に合うものを上に集めてから、重複を削って1000件を厳選
         df_prioritized = pd.concat([df_cleaned[filter_mask], df_cleaned[~filter_mask]])
         unique_items = df_prioritized.drop_duplicates(subset=['item_id']).copy()
 
-        connection = get_db_connection()
         inserted_count = 0
-        
         with connection.cursor() as cursor:
             cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
             cursor.execute("DELETE FROM purchases;")
-            cursor.execute("DELETE FROM items WHERE seller_id = 1")
+            cursor.execute("DELETE FROM items WHERE seller_id = 1;")
 
             img_idx = 0
             for _, row in unique_items.head(1000).iterrows():
@@ -220,7 +274,6 @@ def import_merrec_to_cloud_sql():
                 c1 = str(row['c1_name'])
                 c2 = str(row['c2_name']) if pd.notna(row['c2_name']) else ""
                 
-                # 完全にクリーンな英語のまま保存
                 description = f"【カテゴリ】{c0} > {c1} > {c2}\n【ブランド】{brand}\n【商品の状態】{row['item_condition_name']}"
                 
                 sql = """
@@ -239,7 +292,7 @@ def import_merrec_to_cloud_sql():
             connection.commit()
             
         connection.close()
-        return {"status": "success", "message": f"🎉 デモ最適化版・1000件インポート完了しました！"}
+        return {"status": "success", "message": f"🎉 デモ最適化データ格納完了しました！"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -249,12 +302,11 @@ class RecommendRequest(BaseModel):
     mood_text: str
     mode: str
 
-# 🧠 【OpenAI 概念拡張 × Two-Tower行列演算】最強のクロスオーバー推薦API
+# 🧠 【OpenAI 概念拡張 × n-gram結合幾何空間】最強の推薦API
 @app.post("/api/recommend")
 def get_recommendations(req: RecommendRequest):
     connection = get_db_connection()
     try:
-        # OpenAIによる概念拡張（複合名詞を綺麗に出させるプロンプト調整）
         english_keywords = ""
         if req.mode in ["mood", "both"] and req.mood_text.strip():
             try:
@@ -289,12 +341,22 @@ def get_recommendations(req: RecommendRequest):
             items = cursor.fetchall()
             if not items: return []
 
+            # 過去の購入履歴を取得
             cursor.execute("""
                 SELECT i.name, i.description FROM purchases p
                 JOIN items i ON p.item_id = i.id WHERE p.buyer_id = %s
             """, (req.user_id,))
             past_purchases = cursor.fetchall()
-            history_text = " ".join([f"{p['name']} {p['description']}" for p in past_purchases])
+            
+            # 🆕 【数理強化】いいねした商品の履歴データも一緒に取得してブレンド！
+            cursor.execute("""
+                SELECT i.name, i.description FROM likes l
+                JOIN items i ON l.item_id = i.id WHERE l.user_id = %s
+            """, (req.user_id,))
+            past_likes = cursor.fetchall()
+            
+            # 購入履歴といいね履歴のテキスト表現を綺麗にマージする
+            history_text = " ".join([f"{p['name']} {p['description']}" for p in past_purchases + past_likes])
 
             if req.mode == "mood":
                 combined_user_text = english_keywords
@@ -309,8 +371,6 @@ def get_recommendations(req: RecommendRequest):
             item_texts = [f"{item['name']} {item['description']}" for item in items]
             all_texts = item_texts + [combined_user_text]
 
-            # 🆕 【数理大逆転】ngram_range=(1, 2) を導入！
-            # 1単語だけでなく、2単語の連続（例: 'men sneakers'）も独立した次元として扱い、AND判定を幾何学的に実現！
             vectorizer = TfidfVectorizer(ngram_range=(1, 2), stop_words='english')
             tfidf_matrix = vectorizer.fit_transform(all_texts)
 
