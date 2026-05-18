@@ -117,8 +117,25 @@ def get_items():
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # まだ売れ残っている（on_sale）の商品を最新順に取得する
-            cursor.execute("SELECT id, name, description, price, image_url, seller_id FROM items WHERE status = 'on_sale' ORDER BY id DESC")
+            # 🌟 SQLの解説：
+            # 1. items（i）と users（u）を seller_id をキーにして左結合（LEFT JOIN）します。
+            # 2. これにより、出品者の名前（u.name）を「seller_name」として一緒に取得できます。
+            # 3. WHERE文を外し、売り切れ（sold_out）の商品もタイムラインに届くようにします。
+            sql = """
+                SELECT 
+                    i.id, 
+                    i.name, 
+                    i.description, 
+                    i.price, 
+                    i.image_url, 
+                    i.seller_id, 
+                    i.status,
+                    u.name AS seller_name
+                FROM items i
+                LEFT JOIN users u ON i.seller_id = u.id
+                ORDER BY i.id DESC
+            """
+            cursor.execute(sql)
             result = cursor.fetchall()
             return result
     finally:
