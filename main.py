@@ -3,6 +3,7 @@ import pymysql
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import pandas as pd
 
 app = FastAPI()
 
@@ -224,3 +225,58 @@ def auth_login(data: LoginData):
         raise e
     finally:
         connection.close()
+
+
+
+# 🚀 【安全装置付き】メルカリの初期データを Cloud SQL に流し込む裏口 API
+@app.get("/api/admin/import-merrec")
+def import_merrec_to_cloud_sql():
+    print("⏳ クラウド上で MerRec データセットから商品データを抽出中...")
+    
+    try:
+        url = "https://huggingface.co/datasets/mercari-us/merrec/resolve/main/20230501/000000000000.parquet"
+        df = pd.read_parquet(url, engine="pyarrow")
+        df_sampled = df.head(10000)
+        unique_items = df_sampled.drop_duplicates(subset=['item_id']).copy()
+        
+        connection = get_db_connection()
+        inserted_count = 0
+        
+        with connection.cursor() as cursor:
+            # 🔥 【ここが安全装置！】
+            # 重複を防ぐため、まずは初期データ（seller_id = 1）の商品を一度綺麗に削除する
+            cursor.execute("DELETE FROM items WHERE seller_id = 1")
+            print("🧹 古い初期データを削除しました。")
+
+            # 新鮮な100件を綺麗に流し込む
+            for _, row in unique_items.head(100).iterrows():
+                brand = row['brand_name'] if row['brand_name'] else "ノーブランド"
+                c2 = row['c2_name'] if row['c2_name'] else ""
+                description = f"【カテゴリ】{row['c0_name']} > {row['c1_name']} > {c2}\n【ブランド】{brand}\n【商品の状態】{row['item_condition_name']}"
+                
+                sql = """
+                    INSERT INTO items (name, description, price, image_url, seller_id, status)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """
+                price = int(row['price']) if row['price'] and row['price'] > 0 else 1500
+                
+                cursor.execute(sql, (
+                    row['name'],
+                    description,
+                    price,
+                    "https://example.com/images/default.jpg",
+                    1, # 初期データ用の仮の seller_id
+                    "on_sale"
+                ))
+                inserted_count += 1
+                
+            connection.commit()
+        connection.close()
+        
+        return {
+            "status": "success", 
+            "message": f"🎉 重複を排除し、最新のメルカリデータ {inserted_count} 件を綺麗にインポートしました！"
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
