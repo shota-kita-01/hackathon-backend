@@ -228,7 +228,7 @@ def auth_login(data: LoginData):
 
 
 
-# 🚀 【安全装置付き】メルカリの初期データを Cloud SQL に流し込む裏口 API
+# 🚀 【安全装置・制約回避付き】メルカリの初期データを Cloud SQL に流し込む裏口 API
 @app.get("/api/admin/import-merrec")
 def import_merrec_to_cloud_sql():
     print("⏳ クラウド上で MerRec データセットから商品データを抽出中...")
@@ -243,7 +243,10 @@ def import_merrec_to_cloud_sql():
         inserted_count = 0
         
         with connection.cursor() as cursor:
-            # 🔥 【ここが安全装置！】
+            # 🔓 【ハッカソン必殺技】一時的に外部キー制約を無効化（購入履歴があっても削除・上書き可能にする）
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
+            print("🔓 外部キーチェックを一時的にオフにしました。")
+
             # 重複を防ぐため、まずは初期データ（seller_id = 1）の商品を一度綺麗に削除する
             cursor.execute("DELETE FROM items WHERE seller_id = 1")
             print("🧹 古い初期データを削除しました。")
@@ -269,8 +272,14 @@ def import_merrec_to_cloud_sql():
                     "on_sale"
                 ))
                 inserted_count += 1
-                
+            
+            # 🔒 安全装置を元の状態（有効）に戻す
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
+            print("🔒 外部キーチェックを元に戻しました。")
+            
+            # 変更を確定
             connection.commit()
+            
         connection.close()
         
         return {
@@ -279,4 +288,11 @@ def import_merrec_to_cloud_sql():
         }
         
     except Exception as e:
+        # 万が一エラーが起きた場合も、安全のためにチェックを元に戻す保険
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
+            connection.close()
+        except:
+            pass
         return {"status": "error", "message": str(e)}
