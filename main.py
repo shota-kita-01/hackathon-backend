@@ -169,29 +169,39 @@ class LoginData(BaseModel):
     name: str
     email: str
 
-# Firebase認証連動・ログインAPI
+# Firebase認証連動・ログインAPI（重複ユーザー自動救済版）
 @app.post("/api/auth/login")
 def auth_login(data: LoginData):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 1. すでにこのFirebase UIDを持つユーザーがDBにいるかチェック
+            # 1. まずはFirebase UIDでチェック（通常のリピーター）
             cursor.execute("SELECT id FROM users WHERE firebase_uid = %s", (data.firebase_uid,))
             user = cursor.fetchone()
             
             if user:
-                # 🌟 すでに登録済みのリピーターなら、MySQLの整数ID（例: 1）をそのまま返す
                 return {"status": "success", "id": user["id"]}
-            else:
-                # 🌟 初めてアプリに登録したご新規さんの場合
-                # MySQLの必須項目である password_hash に空文字 "" を入れてエラーを回避します
-                sql = "INSERT INTO users (name, email, firebase_uid, password_hash) VALUES (%s, %s, %s, %s)"
-                cursor.execute(sql, (data.name, data.email, data.firebase_uid, ""))
+            
+            # 2. UIDは新規だが、同じメールアドレスが既にDBにあるかチェック
+            cursor.execute("SELECT id FROM users WHERE email = %s", (data.email,))
+            existing_user = cursor.fetchone()
+            
+            if existing_user:
+                # Firebase側を全削除してUIDが変わってしまったケースなので、
+                # MySQL側のレコードを新しい最新のUIDで上書き更新（アップデート）する！
+                update_sql = "UPDATE users SET firebase_uid = %s WHERE id = %s"
+                cursor.execute(update_sql, (data.firebase_uid, existing_user["id"]))
                 connection.commit()
                 
-                # 今INSERTしたばかりの自動連番のID（例: 2）を取得して返す
-                new_id = cursor.lastrowid
-                return {"status": "success", "id": new_id}
+                return {"status": "success", "id": existing_user["id"]}
+            
+            # 3. 完全なご新規さんの場合
+            sql = "INSERT INTO users (name, email, firebase_uid, password_hash) VALUES (%s, %s, %s, %s)"
+            cursor.execute(sql, (data.name, data.email, data.firebase_uid, ""))
+            connection.commit()
+            
+            new_id = cursor.lastrowid
+            return {"status": "success", "id": new_id}
     except Exception as e:
         connection.rollback()
         raise e
