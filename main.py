@@ -4,6 +4,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 app = FastAPI()
 
@@ -228,7 +231,7 @@ def auth_login(data: LoginData):
 
 
 
-# 🚀 【タイムライン映え対策・日本円換算版】メルカリデータインポートAPI
+# 🚀 メルカリデータインポートAPI
 @app.get("/api/admin/import-merrec")
 def import_merrec_to_cloud_sql():
     print("⏳ クラウド上でデータを加工中...")
@@ -298,3 +301,70 @@ def import_merrec_to_cloud_sql():
         
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    
+
+    # フロントエンドから届く「気分」や「ユーザーID」を受け取る型
+class RecommendRequest(BaseModel):
+    user_id: int
+    mood_text: str # 例: "I am looking for shiny gold luxury jewelry for a wedding party"
+
+# 🧠 【Two-Tower風】気分・履歴・関連を網羅してひたすら計算する推薦API
+@app.post("/api/recommend")
+def get_recommendations(req: RecommendRequest):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            # 1. 全商品データをDBから取得（Item Towerの入力元）
+            cursor.execute("SELECT id, name, description, price, image_url, seller_id, status FROM items")
+            items = cursor.fetchall()
+            
+            if not items:
+                return []
+
+            # 2. ユーザーの「過去の購入履歴」を取得してUser Towerの表現力を強化！
+            cursor.execute("""
+                SELECT i.name, i.description 
+                FROM purchases p
+                JOIN items i ON p.item_id = i.id
+                WHERE p.buyer_id = %s
+            """, (req.user_id,))
+            past_purchases = cursor.fetchall()
+            
+            # 過去の購入履歴テキストを合体させる
+            history_text = ""
+            for p in past_purchases:
+                history_text += f" {p['name']} {p['description']}"
+
+            # 3. User Towerのベクトル構築
+            # 「今の気分」に「過去の履歴」を少しブレンドして、ユーザーの総合的な興味を表現
+            combined_user_text = f"{req.mood_text} {history_text}".strip()
+
+            # 4. アイテムとユーザーのテキストを一括で高次元ベクトル空間へマッピング
+            item_texts = [f"{item['name']} {item['description']}" for item in items]
+            all_texts = item_texts + [combined_user_text]
+
+            # TF-IDFによる高次元ベクトル化（英語の単語の重要度を数理的に算出）
+            vectorizer = TfidfVectorizer(stop_words='english')
+            tfidf_matrix = vectorizer.fit_transform(all_texts)
+
+            # 行列から Itemベクトル群 と Userベクトル を分離
+            item_vectors = tfidf_matrix[:-1]
+            user_vector = tfidf_matrix[-1]
+
+            # 5. 【ひたすら計算】すべての商品とユーザーベクトルのコサイン類似度（内積）を一撃で計算！
+            similarities = cosine_similarity(user_vector, item_vectors).flatten()
+
+            # 6. 計算結果（スコア）を各商品に紐付け
+            for idx, item in enumerate(items):
+                item["score"] = float(similarities[idx])
+
+            # 7. スコアが高い順（類似度が高い順）にソート
+            recommended_items = sorted(items, key=lambda x: x["score"], reverse=True)
+
+            # 上位10件を推薦結果として返す
+            return recommended_items[:10]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        connection.close()
