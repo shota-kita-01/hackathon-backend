@@ -61,15 +61,21 @@ def get_recommendations(req: RecommendRequest):
             similarities = cosine_similarity(user_vector, item_vectors).flatten()
 
             # 🆕 2. 「両方」が選ばれている時だけ、売切商品のスコアに0.5の減衰ペナルティを課す
+            # 🆕 マッチングスコアの付与と「0.9倍ペナルティ」への調整
             for idx, item in enumerate(items):
                 base_score = float(similarities[idx])
+                
+                # 💡 0.5倍は強すぎたので、0.9倍にして「少しだけ順位を下げる」絶妙な塩梅にチューニング
                 if filter_status == "both" and item["status"] == "sold_out":
-                    item["score"] = base_score * 0.5
+                    item["score"] = base_score * 0.9
                 else:
                     item["score"] = base_score
 
+            # 補正後のスコアで一斉ソート
             recommended_items = sorted(items, key=lambda x: x["score"], reverse=True)
-            return recommended_items[:40]
+            
+            # 💡 [:40] の切り捨てを撤廃し、ソート済み全件をフロントに返す！
+            return recommended_items
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
