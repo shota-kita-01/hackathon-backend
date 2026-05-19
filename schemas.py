@@ -14,3 +14,4 @@ class RecommendRequest(BaseModel):
     user_id: int
     mood_text: str
     mode: str
+    filter_status: str = "both"

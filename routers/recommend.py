@@ -10,59 +10,45 @@ router = APIRouter()
 def get_recommendations(req: RecommendRequest):
     connection = get_db_connection()
     try:
+        filter_status = req.filter_status # 🆕 フィルター条件の取得
+
         english_keywords = ""
         if req.mode in ["mood", "both"] and req.mood_text.strip():
             try:
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are a semantic processing engine for a fashion e-commerce search.\n"
-                                "Convert the user input into a space-separated list of optimal English search keywords.\n"
-                                "Crucially, preserve natural compound phrases like 'men sneakers', 'women bag', or 'gold necklace'.\n"
-                                "Output ONLY the space-separated lowercase keywords. No punctuation, no markdown."
-                            )
-                        },
+                        {"role": "system", "content": "You are a semantic processing engine for a fashion e-commerce search. Convert the user input into a space-separated list of optimal English search keywords. Output ONLY the space-separated lowercase keywords. No punctuation."},
                         {"role": "user", "content": f'User input: "{req.mood_text}"'}
                     ],
                     temperature=0.2,
                 )
                 english_keywords = response.choices[0].message.content.strip().lower()
-                print(f"🧠 [OpenAI LLM Expansion]: {req.mood_text} ➔ {english_keywords}")
             except Exception as openai_err:
-                print(f"⚠️ OpenAI Error: {openai_err}")
                 english_keywords = req.mood_text
 
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, name, description, price, image_url, seller_id, status FROM items")
+            # 🆕 1. SQLの段階で「販売中のみ」「売切のみ」は弾く
+            if filter_status == "active":
+                cursor.execute("SELECT id, name, description, price, image_url, seller_id, status FROM items WHERE status = 'on_sale'")
+            elif filter_status == "sold_out":
+                cursor.execute("SELECT id, name, description, price, image_url, seller_id, status FROM items WHERE status = 'sold_out'")
+            else:
+                cursor.execute("SELECT id, name, description, price, image_url, seller_id, status FROM items")
+                
             items = cursor.fetchall()
             if not items: return []
 
-            cursor.execute("""
-                SELECT i.name, i.description FROM purchases p
-                JOIN items i ON p.item_id = i.id WHERE p.buyer_id = %s
-            """, (req.user_id,))
+            cursor.execute("SELECT i.name, i.description FROM purchases p JOIN items i ON p.item_id = i.id WHERE p.buyer_id = %s", (req.user_id,))
             past_purchases = cursor.fetchall()
             
-            cursor.execute("""
-                SELECT i.name, i.description FROM likes l
-                JOIN items i ON l.item_id = i.id WHERE l.user_id = %s
-            """, (req.user_id,))
+            cursor.execute("SELECT i.name, i.description FROM likes l JOIN items i ON l.item_id = i.id WHERE l.user_id = %s", (req.user_id,))
             past_likes = cursor.fetchall()
             
             history_text = " ".join([f"{p['name']} {p['description']}" for p in past_purchases + past_likes])
 
-            if req.mode == "mood":
-                combined_user_text = english_keywords
-            elif req.mode == "history":
-                combined_user_text = history_text
-            else:
-                combined_user_text = f"{english_keywords} {history_text}".strip()
-
-            if not combined_user_text:
-                return items[:10]
+            combined_user_text = english_keywords if req.mode == "mood" else history_text if req.mode == "history" else f"{english_keywords} {history_text}".strip()
+            if not combined_user_text: return items[:10]
 
             item_texts = [f"{item['name']} {item['description']}" for item in items]
             all_texts = item_texts + [combined_user_text]
@@ -72,14 +58,18 @@ def get_recommendations(req: RecommendRequest):
 
             item_vectors = tfidf_matrix[:-1]
             user_vector = tfidf_matrix[-1]
-
             similarities = cosine_similarity(user_vector, item_vectors).flatten()
 
+            # 🆕 2. 「両方」が選ばれている時だけ、売切商品のスコアに0.5の減衰ペナルティを課す
             for idx, item in enumerate(items):
-                item["score"] = float(similarities[idx])
+                base_score = float(similarities[idx])
+                if filter_status == "both" and item["status"] == "sold_out":
+                    item["score"] = base_score * 0.5
+                else:
+                    item["score"] = base_score
 
             recommended_items = sorted(items, key=lambda x: x["score"], reverse=True)
-            return recommended_items[:10]
+            return recommended_items[:40]
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
