@@ -176,3 +176,43 @@ def record_item_view(item_id: int, data: dict):
             return {"status": "success"}
     finally:
         connection.close()
+
+
+# ユーザーの閲覧履歴（最新20件）を取得するAPI
+@router.get("/api/users/{user_id}/views")
+def get_user_views(user_id: int):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                SELECT i.*, u.name AS seller_name
+                FROM item_views v
+                JOIN items i ON v.item_id = i.id
+                LEFT JOIN users u ON i.seller_id = u.id
+                WHERE v.user_id = %s
+                ORDER BY v.id DESC
+                LIMIT 20
+            """
+            cursor.execute(sql, (user_id,))
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+# ユーザーの購入履歴を取得するAPI
+@router.get("/api/users/{user_id}/purchases")
+def get_user_purchases(user_id: int):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                SELECT i.*, u.name AS seller_name
+                FROM purchases p
+                JOIN items i ON p.item_id = i.id
+                LEFT JOIN users u ON i.seller_id = u.id
+                WHERE p.buyer_id = %s
+                ORDER BY p.id DESC
+            """
+            cursor.execute(sql, (user_id,))
+            return cursor.fetchall()
+    finally:
+        connection.close()
