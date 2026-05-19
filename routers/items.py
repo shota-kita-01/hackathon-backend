@@ -1,33 +1,98 @@
 from fastapi import APIRouter, HTTPException
-from db import get_db_connection
+from db import get_db_connection, client
 
 router = APIRouter()
 
+# 🧠 【機能4：自動商品説明生成API】
+@router.post("/api/ai/suggest-description")
+def suggest_description(data: dict):
+    item_name = data.get("name")
+    if not item_name: raise HTTPException(status_code=400, detail="商品名が必要です")
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert copywriter for a global fashion e-commerce marketplace.\n"
+                        "Generate a professional, appealing, and clean English product description based on the product name provided.\n"
+                        "Include sections like [Overview], [Features], and [Styling Tips] if applicable.\n"
+                        "Output ONLY the generated description. No markdown block wrappers (like ```), no conversational text."
+                    )
+                },
+                {"role": "user", "content": f"Product Name: {item_name}"}
+            ],
+            temperature=0.7,
+        )
+        return {"status": "success", "description": response.choices[0].message.content.strip()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 🧠 【機能5：AI価格査定API】
+@router.post("/api/ai/suggest-price")
+def suggest_price(data: dict):
+    item_name = data.get("name")
+    if not item_name: raise HTTPException(status_code=400, detail="商品名が必要です")
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an AI price valuation engine for a fashion marketplace.\n"
+                        "Analyze the given product name and estimate its fair market value in US Dollars (USD).\n"
+                        "Output ONLY a single integer representing the dollar amount. Do not include '$', text, or any punctuation.\n"
+                        "Example: if you think it's worth $45, output '45'."
+                    )
+                },
+                {"role": "user", "content": f"Product Name: {item_name}"}
+            ],
+            temperature=0.3,
+        )
+        usd_price = int(response.choices[0].message.content.strip())
+        # デモ用に1ドル=150円換算の日本円にしてフロントに返す
+        jpy_price = usd_price * 150
+        return {"status": "success", "suggested_price": jpy_price}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 🛍️ 【商品新規出品API（tags対応版）】
 @router.post("/api/items")
 def create_item(item_data: dict):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
             sql = """
-                INSERT INTO items (name, description, price, image_url, seller_id, status)
-                VALUES (%s, %s, %s, %s, %s, 'on_sale')
+                INSERT INTO items (name, description, price, image_url, seller_id, tags, status)
+                VALUES (%s, %s, %s, %s, %s, %s, 'on_sale')
             """
             cursor.execute(sql, (
-                item_data.get("name"), item_data.get("description"),
-                item_data.get("price"), item_data.get("image_url"), item_data.get("seller_id")
+                item_data.get("name"),
+                item_data.get("description"),
+                item_data.get("price"),
+                item_data.get("image_url"),
+                item_data.get("seller_id"),
+                item_data.get("tags", ""), 
             ))
             connection.commit()
             return {"status": "success", "message": "商品が出品されました！"}
     finally:
         connection.close()
 
+
+# 🛒 【商品一覧取得API（tags取得版）】
 @router.get("/api/items")
 def get_items():
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
             sql = """
-                SELECT i.id, i.name, i.description, i.price, i.image_url, i.seller_id, i.status, u.name AS seller_name
+                SELECT i.id, i.name, i.description, i.price, i.image_url, i.seller_id, i.tags, i.status, u.name AS seller_name
                 FROM items i LEFT JOIN users u ON i.seller_id = u.id ORDER BY i.id DESC
             """
             cursor.execute(sql)
@@ -35,6 +100,8 @@ def get_items():
     finally:
         connection.close()
 
+
+# 🛍️ 【商品購入処理API】
 @router.post("/api/items/{item_id}/purchase")
 def purchase_item(item_id: int, buyer_data: dict):
     buyer_id = buyer_data.get("buyer_id")
@@ -57,6 +124,8 @@ def purchase_item(item_id: int, buyer_data: dict):
     finally:
         connection.close()
 
+
+# ❤️ 【いいね登録・解除トグルAPI】
 @router.post("/api/items/{item_id}/like")
 def toggle_like(item_id: int, data: dict):
     user_id = data.get("user_id")
@@ -76,6 +145,8 @@ def toggle_like(item_id: int, data: dict):
     finally:
         connection.close()
 
+
+# ❤️ 【いいねした商品一覧取得API】
 @router.get("/api/users/{user_id}/likes")
 def get_user_likes(user_id: int):
     connection = get_db_connection()
@@ -91,6 +162,8 @@ def get_user_likes(user_id: int):
     finally:
         connection.close()
 
+
+# 👁️ 【閲覧履歴記録API】
 @router.post("/api/items/{item_id}/view")
 def record_item_view(item_id: int, data: dict):
     user_id = data.get("user_id")
