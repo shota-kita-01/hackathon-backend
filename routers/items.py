@@ -61,15 +61,18 @@ def suggest_price(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 🛍️ 【商品新規出品API（tags対応版）】
+# 🛍️ 【商品新規出品API（ニックネーム・発送日対応版）】
 @router.post("/api/items")
 def create_item(item_data: dict):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
+            # 🆕 SQL文に seller_nickname と shipping_days を追加
+            # ※まだDBのマイグレーション（カラム追加）が終わっていない場合でも
+            # フロント側からのデータを受け取れるようにしています
             sql = """
-                INSERT INTO items (name, description, price, image_url, seller_id, tags, status)
-                VALUES (%s, %s, %s, %s, %s, %s, 'on_sale')
+                INSERT INTO items (name, description, price, image_url, seller_id, tags, status, seller_nickname, shipping_days)
+                VALUES (%s, %s, %s, %s, %s, %s, 'on_sale', %s, %s)
             """
             cursor.execute(sql, (
                 item_data.get("name"),
@@ -78,6 +81,8 @@ def create_item(item_data: dict):
                 item_data.get("image_url"),
                 item_data.get("seller_id"),
                 item_data.get("tags", ""), 
+                item_data.get("seller_nickname", "名無しさん"), # 🆕 ニックネームを追加（デフォルト値設定）
+                item_data.get("shipping_days", "1〜2日で発送") # 🆕 発送日を追加（デフォルト値設定）
             ))
             connection.commit()
             return {"status": "success", "message": "商品が出品されました！"}
@@ -85,14 +90,16 @@ def create_item(item_data: dict):
         connection.close()
 
 
-# 🛒 【商品一覧取得API（tags取得版）】
+# 🛒 【商品一覧取得API（ニックネーム・発送日取得版）】
 @router.get("/api/items")
 def get_items():
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
+            # 🆕 SELECT句に i.seller_nickname, i.shipping_days を追加
             sql = """
-                SELECT i.id, i.name, i.description, i.price, i.image_url, i.seller_id, i.tags, i.status, u.name AS seller_name
+                SELECT i.id, i.name, i.description, i.price, i.image_url, i.seller_id, i.tags, i.status, 
+                       COALESCE(i.seller_nickname, u.name, '名無しさん') AS seller_name, i.shipping_days
                 FROM items i LEFT JOIN users u ON i.seller_id = u.id ORDER BY i.id DESC
             """
             cursor.execute(sql)
@@ -153,7 +160,7 @@ def get_user_likes(user_id: int):
     try:
         with connection.cursor() as cursor:
             sql = """
-                SELECT i.*, u.name AS seller_name, TRUE AS is_liked
+                SELECT i.*, COALESCE(i.seller_nickname, u.name, '名無しさん') AS seller_name, TRUE AS is_liked
                 FROM likes l JOIN items i ON l.item_id = i.id
                 LEFT JOIN users u ON i.seller_id = u.id WHERE l.user_id = %s ORDER BY l.created_at DESC
             """
@@ -185,7 +192,7 @@ def get_user_views(user_id: int):
     try:
         with connection.cursor() as cursor:
             sql = """
-                SELECT i.*, u.name AS seller_name
+                SELECT i.*, COALESCE(i.seller_nickname, u.name, '名無しさん') AS seller_name
                 FROM item_views v
                 JOIN items i ON v.item_id = i.id
                 LEFT JOIN users u ON i.seller_id = u.id
@@ -205,12 +212,29 @@ def get_user_purchases(user_id: int):
     try:
         with connection.cursor() as cursor:
             sql = """
-                SELECT i.*, u.name AS seller_name
+                SELECT i.*, COALESCE(i.seller_nickname, u.name, '名無しさん') AS seller_name
                 FROM purchases p
                 JOIN items i ON p.item_id = i.id
                 LEFT JOIN users u ON i.seller_id = u.id
                 WHERE p.buyer_id = %s
                 ORDER BY p.id DESC
+            """
+            cursor.execute(sql, (user_id,))
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+# 🆕 【追加：ユーザー個人の出品履歴を取得するAPI】
+@router.get("/api/users/{user_id}/products")
+def get_user_products(user_id: int):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                SELECT i.*, COALESCE(i.seller_nickname, '名無しさん') AS seller_name
+                FROM items i
+                WHERE i.seller_id = %s
+                ORDER BY i.id DESC
             """
             cursor.execute(sql, (user_id,))
             return cursor.fetchall()
