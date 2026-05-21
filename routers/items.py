@@ -1,63 +1,46 @@
 from fastapi import APIRouter, HTTPException
 from google.genai import types
-# db.py から新しくなった Gemini の client と接続関数をインポート
 from db import get_db_connection, client
+import uuid
 
 router = APIRouter()
 
 # ===================================================
-# 📦 1. AIカタログ商品API（Amazon 320件データ用 / 構造統一版）
+# 📦 1. AIカタログ商品一覧 ＆ 詳細API（Amazon専用）
 # ===================================================
 
 @router.get("/api/products")
 def get_all_products():
-    """
-    今回インポートした320件のAI特権データを、
-    フリマ商品（items）と100%同じデータ構造に化けさせて一括取得するAPI
-    """
+    """Amazonの特権データをフリマと同じ綺麗な構造で一括取得"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 💡 喜多さんの指定したルール通りにSQLの「AS（エイリアス）」を使ってデータを整形
             sql = """
                 SELECT 
-                    id AS id,                         -- Cloud SQL側で自動生成した本物の通し番号id
-                    asin AS asin,                     -- 元のASINも連携用に残します
+                    id AS id, 
+                    asin AS asin,
                     name AS name, 
                     price AS price, 
-                    ai_category AS tags,              -- カテゴリを tags にマッピング
+                    ai_category AS tags, 
                     description AS description, 
                     image_url AS image_url, 
-                    'on_sale' AS status,              -- 常に 'on_sale' を動的に生成
-                    'Amazon公式' AS seller_name,       -- 出品者名を固定文字で生成
-                    '1〜2日で発送' AS shipping_days     -- 発送日数も生成
+                    status AS status,                  -- 追加した本物のstatus
+                    'Amazon公式' AS seller_name, 
+                    '1〜2日で発送' AS shipping_days 
                 FROM products;
             """
             cursor.execute(sql)
-            products = cursor.fetchall()
-            
-            return {
-                "status": "success",
-                "count": len(products),
-                "data": products
-            }
-    except Exception as e:
-        print(f"🔥 AI Products API Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            return {"status": "success", "data": cursor.fetchall()}
     finally:
         connection.close()
 
 
 @router.get("/api/products/{asin}")
 def get_product_detail(asin: str):
-    """
-    商品詳細画面へ遷移したときに、そのASINの商品情報を
-    フリマ商品と100%同じデータ構造に化けさせて単件取得するAPI
-    """
+    """詳細画面用データ取得"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 💡 🆕 詳細画面でも一覧と全く同じキー名で返却するようにSQLを最適化！
             sql = """
                 SELECT 
                     id AS id,
@@ -67,7 +50,7 @@ def get_product_detail(asin: str):
                     ai_category AS tags,
                     description AS description, 
                     image_url AS image_url, 
-                    'on_sale' AS status,
+                    status AS status,
                     'Amazon公式' AS seller_name,
                     '1〜2日で発送' AS shipping_days
                 FROM products 
@@ -76,16 +59,205 @@ def get_product_detail(asin: str):
             cursor.execute(sql, (asin,))
             product = cursor.fetchone()
             if not product:
-                raise HTTPException(status_code=404, detail="指定された商品が見つかりません")
+                raise HTTPException(status_code=404, detail="商品が見つかりません")
             return product
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
     finally:
         connection.close()
 
 
 # ===================================================
-# 🧠 2. 既存機能：AI自動生成 ＆ 価格査定API（完全維持）
+# 🛒 2. 既存のフリマ用URL（/api/items）の中身もAmazonに偽装
+# ===================================================
+
+@router.get("/api/items")
+def get_items():
+    """
+    フロントの fetchAllItems() がここを叩きにきても、
+    バグらせずにAmazonの商品をそっと返してあげるための優しさのルート
+    """
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                SELECT 
+                    id AS id, 
+                    name AS name, 
+                    price AS price, 
+                    ai_category AS tags, 
+                    description AS description, 
+                    image_url AS image_url, 
+                    status AS status, 
+                    'Amazon公式' AS seller_name, 
+                    '1〜2日で発送' AS shipping_days 
+                FROM products
+                ORDER BY id DESC;
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+
+@router.post("/api/items")
+def create_item(item_data: dict):
+    """もしフロントから新規出品されたら、AmazonカタログにダミーASINで追加する"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                INSERT INTO products (asin, name, description, price, ai_category, image_url, status)
+                VALUES (%s, %s, %s, %s, %s, %s, 'on_sale')
+            """
+            dummy_asin = f"CUSTOM_{uuid.uuid4().hex[:8].upper()}"
+            cursor.execute(sql, (
+                dummy_asin,
+                item_data.get("name"),
+                item_data.get("description"),
+                item_data.get("price"),
+                item_data.get("tags", "カスタム"),
+                item_data.get("image_url")
+            ))
+            connection.commit()
+            return {"status": "success", "message": "Amazonカタログに商品が追加されました！"}
+    finally:
+        connection.close()
+
+
+# ===================================================
+# 🛍️ 3. 購入・いいね・履歴APIを「Amazonデータ」へ完全最適化
+# ===================================================
+
+@router.post("/api/items/{item_id}/purchase")
+def purchase_item(item_id: int, buyer_data: dict):
+    """Amazon商品を本気で購入（SOLD OUT化）させる"""
+    buyer_id = buyer_data.get("buyer_id")
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT status FROM products WHERE id = %s", (item_id,))
+            product = cursor.fetchone()
+            if not product: raise HTTPException(status_code=404, detail="商品が見つかりません")
+            if product["status"] == "sold_out": raise HTTPException(status_code=400, detail="売り切れています")
+            
+            cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
+            cursor.execute("UPDATE products SET status = 'sold_out' WHERE id = %s", (item_id,))
+            connection.commit()
+            return {"status": "success", "message": "商品の購入が完了しました！"}
+    except Exception as e:
+        connection.rollback()
+        raise e
+    finally:
+        connection.close()
+
+
+@router.post("/api/items/{item_id}/like")
+def toggle_like(item_id: int, data: dict):
+    """Amazon商品に対して『いいね』をトグルする"""
+    user_id = data.get("user_id")
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM likes WHERE user_id = %s AND item_id = %s", (user_id, item_id))
+            if cursor.fetchone():
+                cursor.execute("DELETE FROM likes WHERE user_id = %s AND item_id = %s", (user_id, item_id))
+                like_status = "unliked"
+            else:
+                cursor.execute("INSERT INTO likes (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
+                like_status = "liked"
+            connection.commit()
+            return {"status": "success", "like_status": like_status}
+    finally:
+        connection.close()
+
+
+@router.get("/api/users/{user_id}/likes")
+def get_user_likes(user_id: int):
+    """ユーザーが『いいね』したAmazon商品の一覧を取得"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                SELECT 
+                    p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
+                    p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
+                    p.status AS status, 'Amazon公式' AS seller_name, TRUE AS is_liked
+                FROM likes l 
+                JOIN products p ON l.item_id = p.id
+                WHERE l.user_id = %s ORDER BY l.created_at DESC;
+            """
+            cursor.execute(sql, (user_id,))
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+
+@router.post("/api/items/{item_id}/view")
+def record_item_view(item_id: int, data: dict):
+    """Amazon商品の閲覧履歴を記録"""
+    user_id = data.get("user_id")
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("INSERT INTO item_views (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
+            connection.commit()
+            return {"status": "success"}
+    finally:
+        connection.close()
+
+
+@router.get("/api/users/{user_id}/views")
+def get_user_views(user_id: int):
+    """Amazon商品の閲覧履歴（最新20件）を取得"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                SELECT 
+                    p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
+                    p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
+                    p.status AS status, 'Amazon公式' AS seller_name
+                FROM item_views v
+                JOIN products p ON v.item_id = p.id
+                WHERE v.user_id = %s
+                ORDER BY v.id DESC
+                LIMIT 20;
+            """
+            cursor.execute(sql, (user_id,))
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+
+@router.get("/api/users/{user_id}/purchases")
+def get_user_purchases(user_id: int):
+    """Amazon商品の購入履歴を取得"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                SELECT 
+                    p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
+                    p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
+                    p.status AS status, 'Amazon公式' AS seller_name
+                FROM purchases pur
+                JOIN products p ON pur.item_id = p.id
+                WHERE pur.buyer_id = %s
+                ORDER BY pur.id DESC;
+            """
+            cursor.execute(sql, (user_id,))
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+
+@router.get("/api/users/{user_id}/products")
+def get_user_products(user_id: int):
+    """個人出品の履歴タブ用（Amazon専業のため空配列を返却して平和に保つ）"""
+    return []
+
+
+# ===================================================
+# 🧠 4. AI商品説明自動生成 ＆ 価格査定（完全維持）
 # ===================================================
 
 @router.post("/api/ai/suggest-description")
@@ -110,6 +282,7 @@ def suggest_description(data: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.post("/api/ai/suggest-price")
 def suggest_price(data: dict):
     item_name = data.get("name")
@@ -129,185 +302,6 @@ def suggest_price(data: dict):
             )
         )
         usd_price = int(response.text.strip())
-        jpy_price = usd_price * 150
-        return {"status": "success", "suggested_price": jpy_price}
+        return {"status": "success", "suggested_price": usd_price * 150}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ===================================================
-# 🛍️ 3. 既存機能：C2C ユーザー出品・売買・履歴API（完全維持）
-# ===================================================
-
-@router.post("/api/items")
-def create_item(item_data: dict):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = """
-                INSERT INTO items (name, description, price, image_url, seller_id, tags, status, seller_nickname, shipping_days)
-                VALUES (%s, %s, %s, %s, %s, %s, 'on_sale', %s, %s)
-            """
-            cursor.execute(sql, (
-                item_data.get("name"),
-                item_data.get("description"),
-                item_data.get("price"),
-                item_data.get("image_url"),
-                item_data.get("seller_id"),
-                item_data.get("tags", ""), 
-                item_data.get("seller_nickname", "名無しさん"),
-                item_data.get("shipping_days", "1〜2日で発送")
-            ))
-            connection.commit()
-            return {"status": "success", "message": "商品が出品されました！"}
-    finally:
-        connection.close()
-
-
-@router.get("/api/items")
-def get_items():
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            # 💡 フロントのために、Amazonデータと完全に同じカラム名・同じ順番で並び替えて返却！
-            sql = """
-                SELECT 
-                    i.id AS id,                                                     -- フリマの通し番号id
-                    i.name AS name, 
-                    i.price AS price, 
-                    i.tags AS tags, 
-                    i.description AS description, 
-                    i.image_url AS image_url, 
-                    i.status AS status, 
-                    COALESCE(i.seller_nickname, u.name, '名無しさん') AS seller_name, -- 出品者名
-                    i.shipping_days AS shipping_days                                -- 発送日数
-                FROM items i 
-                LEFT JOIN users u ON i.seller_id = u.id 
-                ORDER BY i.id DESC;
-            """
-            cursor.execute(sql)
-            return cursor.fetchall()
-    finally:
-        connection.close()
-
-@router.post("/api/items/{item_id}/purchase")
-def purchase_item(item_id: int, buyer_data: dict):
-    buyer_id = buyer_data.get("buyer_id")
-    if not buyer_id: raise HTTPException(status_code=400, detail="購入者のIDが必要です")
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT status FROM items WHERE id = %s", (item_id,))
-            item = cursor.fetchone()
-            if not item: raise HTTPException(status_code=404, detail="商品が見つかりません")
-            if item["status"] == "sold_out": raise HTTPException(status_code=400, detail="売り切れています")
-            
-            cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
-            cursor.execute("UPDATE items SET status = 'sold_out' WHERE id = %s", (item_id,))
-            connection.commit()
-            return {"status": "success", "message": "商品の購入が完了しました！"}
-    except Exception as e:
-        connection.rollback()
-        raise e
-    finally:
-        connection.close()
-
-@router.post("/api/items/{item_id}/like")
-def toggle_like(item_id: int, data: dict):
-    user_id = data.get("user_id")
-    if not user_id: raise HTTPException(status_code=400, detail="user_idが必要です")
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT id FROM likes WHERE user_id = %s AND item_id = %s", (user_id, item_id))
-            if cursor.fetchone():
-                cursor.execute("DELETE FROM likes WHERE user_id = %s AND item_id = %s", (user_id, item_id))
-                like_status = "unliked"
-            else:
-                cursor.execute("INSERT INTO likes (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
-                like_status = "liked"
-            connection.commit()
-            return {"status": "success", "like_status": like_status}
-    finally:
-        connection.close()
-
-@router.get("/api/users/{user_id}/likes")
-def get_user_likes(user_id: int):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = """
-                SELECT i.*, COALESCE(i.seller_nickname, u.name, '名無しさん') AS seller_name, TRUE AS is_liked
-                FROM likes l JOIN items i ON l.item_id = i.id
-                LEFT JOIN users u ON i.seller_id = u.id WHERE l.user_id = %s ORDER BY l.created_at DESC
-            """
-            cursor.execute(sql, (user_id,))
-            return cursor.fetchall()
-    finally:
-        connection.close()
-
-@router.post("/api/items/{item_id}/view")
-def record_item_view(item_id: int, data: dict):
-    user_id = data.get("user_id")
-    if not user_id: raise HTTPException(status_code=400, detail="user_idが必要です")
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("INSERT INTO item_views (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
-            connection.commit()
-            return {"status": "success"}
-    finally:
-        connection.close()
-
-@router.get("/api/users/{user_id}/views")
-def get_user_views(user_id: int):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = """
-                SELECT i.*, COALESCE(i.seller_nickname, u.name, '名無しさん') AS seller_name
-                FROM item_views v
-                JOIN items i ON v.item_id = i.id
-                LEFT JOIN users u ON i.seller_id = u.id
-                WHERE v.user_id = %s
-                ORDER BY v.id DESC
-                LIMIT 20
-            """
-            cursor.execute(sql, (user_id,))
-            return cursor.fetchall()
-    finally:
-        connection.close()
-
-@router.get("/api/users/{user_id}/purchases")
-def get_user_purchases(user_id: int):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = """
-                SELECT i.*, COALESCE(i.seller_nickname, u.name, '名無しさん') AS seller_name
-                FROM purchases p
-                JOIN items i ON p.item_id = i.id
-                LEFT JOIN users u ON i.seller_id = u.id
-                WHERE p.buyer_id = %s
-                ORDER BY p.id DESC
-            """
-            cursor.execute(sql, (user_id,))
-            return cursor.fetchall()
-    finally:
-        connection.close()
-
-@router.get("/api/users/{user_id}/products")
-def get_user_products(user_id: int):
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            sql = """
-                SELECT i.*, COALESCE(i.seller_nickname, '名無しさん') AS seller_name
-                FROM items i
-                WHERE i.seller_id = %s
-                ORDER BY i.id DESC
-            """
-            cursor.execute(sql, (user_id,))
-            return cursor.fetchall()
-    finally:
-        connection.close()
