@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import recommend
+from routers import recommend, items, auth, admin
 from recommendation_engine import RecommendationEngine
 
 # ==========================================
@@ -31,8 +31,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔌 ルーターの連結（喜多さんの指定パスがそのままエンドポイントになります）
+# 🔌 ルーターの連結
 app.include_router(recommend.router)
+app.include_router(items.router)
+app.include_router(auth.router)
+app.include_router(admin.router)
 
 @app.get("/")
 def read_root():
