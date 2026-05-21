@@ -4,4 +4,6 @@ PyMySQL==1.1.1
 pandas
 pyarrow
 scikit-learn
-openai
+google-genai
+google-generativeai
+datasets

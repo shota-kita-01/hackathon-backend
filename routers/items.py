@@ -1,75 +1,128 @@
 from fastapi import APIRouter, HTTPException
+from google.genai import types
+# db.py から新しくなった Gemini の client と接続関数をインポート
 from db import get_db_connection, client
 
 router = APIRouter()
 
-# 🧠 【機能4：自動商品説明生成API】
+# ==================================================
+# 📦 【新設】AIカタログ商品API（Amazon 320件データ用）
+# ===================================================
+
+@router.get("/api/products")
+def get_all_products():
+    """
+    フロントエンドのホーム画面や検索画面で、
+    今回インポートした320件のAI特権データをズラッと一覧表示するためのAPI
+    """
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            # 💡 通信軽量化のため、重たい embedding（ベクトル）は除外して取得します
+            sql = """
+                SELECT asin, name, price, ai_category, description, image_url 
+                FROM products;
+            """
+            cursor.execute(sql)
+            products = cursor.fetchall()
+            
+            # フロントエンドが扱いやすいようにオブジェクト形式で返却
+            return {
+                "status": "success",
+                "count": len(products),
+                "data": products
+            }
+    except Exception as e:
+        print(f"🔥 AI Products API Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        connection.close()
+
+
+@router.get("/api/products/{asin}")
+def get_product_detail(asin: str):
+    """
+    商品詳細画面へ遷移したときに、そのASINのプレーンな商品情報を取得するAPI
+    """
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                SELECT asin, name, price, ai_category, description, image_url 
+                FROM products 
+                WHERE asin = %s;
+            """
+            cursor.execute(sql, (asin,))
+            product = cursor.fetchone()
+            if not product:
+                raise HTTPException(status_code=404, detail="指定された商品が見つかりません")
+            return product
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        connection.close()
+
+
+# ===================================================
+# 🧠 既存機能：AI自動生成 ＆ 価格査定API（完全維持）
+# ===================================================
+
 @router.post("/api/ai/suggest-description")
 def suggest_description(data: dict):
     item_name = data.get("name")
     if not item_name: raise HTTPException(status_code=400, detail="商品名が必要です")
-    
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an expert copywriter for a global fashion e-commerce marketplace.\n"
-                        "Generate a professional, appealing, and clean English product description based on the product name provided.\n"
-                        "Include sections like [Overview], [Features], and [Styling Tips] if applicable.\n"
-                        "Output ONLY the generated description. No markdown block wrappers (like ```), no conversational text."
-                    )
-                },
-                {"role": "user", "content": f"Product Name: {item_name}"}
-            ],
-            temperature=0.7,
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"Product Name: {item_name}",
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are an expert copywriter for a global fashion e-commerce marketplace.\n"
+                    "Generate a professional, appealing, and clean English product description based on the product name provided.\n"
+                    "Include sections like [Overview], [Features], and [Styling Tips] if applicable.\n"
+                    "Output ONLY the generated description. No markdown block wrappers (like ```), no conversational text."
+                ),
+                temperature=0.7,
+            )
         )
-        return {"status": "success", "description": response.choices[0].message.content.strip()}
+        return {"status": "success", "description": response.text.strip()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# 🧠 【機能5：AI価格査定API】
 @router.post("/api/ai/suggest-price")
 def suggest_price(data: dict):
     item_name = data.get("name")
     if not item_name: raise HTTPException(status_code=400, detail="商品名が必要です")
-    
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an AI price valuation engine for a fashion marketplace.\n"
-                        "Analyze the given product name and estimate its fair market value in US Dollars (USD).\n"
-                        "Output ONLY a single integer representing the dollar amount. Do not include '$', text, or any punctuation.\n"
-                        "Example: if you think it's worth $45, output '45'."
-                    )
-                },
-                {"role": "user", "content": f"Product Name: {item_name}"}
-            ],
-            temperature=0.3,
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"Product Name: {item_name}",
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are an AI price valuation engine for a fashion marketplace.\n"
+                    "Analyze the given product name and estimate its fair market value in US Dollars (USD).\n"
+                    "Output ONLY a single integer representing the dollar amount. Do not include '$', text, or any punctuation.\n"
+                    "Example: if you think it's worth $45, output '45'."
+                ),
+                temperature=0.3,
+            )
         )
-        usd_price = int(response.choices[0].message.content.strip())
-        # デモ用に1ドル=150円換算の日本円にしてフロントに返す
+        usd_price = int(response.text.strip())
         jpy_price = usd_price * 150
         return {"status": "success", "suggested_price": jpy_price}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 🛍️ 【商品新規出品API（ニックネーム・発送日対応版）】
+# ===================================================
+# 🛍️ 既存機能：C2C ユーザー出品・売買・履歴API（完全維持）
+# ===================================================
+
 @router.post("/api/items")
 def create_item(item_data: dict):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 🆕 SQL文に seller_nickname と shipping_days を追加
-            # ※まだDBのマイグレーション（カラム追加）が終わっていない場合でも
-            # フロント側からのデータを受け取れるようにしています
             sql = """
                 INSERT INTO items (name, description, price, image_url, seller_id, tags, status, seller_nickname, shipping_days)
                 VALUES (%s, %s, %s, %s, %s, %s, 'on_sale', %s, %s)
@@ -81,22 +134,19 @@ def create_item(item_data: dict):
                 item_data.get("image_url"),
                 item_data.get("seller_id"),
                 item_data.get("tags", ""), 
-                item_data.get("seller_nickname", "名無しさん"), # 🆕 ニックネームを追加（デフォルト値設定）
-                item_data.get("shipping_days", "1〜2日で発送") # 🆕 発送日を追加（デフォルト値設定）
+                item_data.get("seller_nickname", "名無しさん"),
+                item_data.get("shipping_days", "1〜2日で発送")
             ))
             connection.commit()
             return {"status": "success", "message": "商品が出品されました！"}
     finally:
         connection.close()
 
-
-# 🛒 【商品一覧取得API（ニックネーム・発送日取得版）】
 @router.get("/api/items")
 def get_items():
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 🆕 SELECT句に i.seller_nickname, i.shipping_days を追加
             sql = """
                 SELECT i.id, i.name, i.description, i.price, i.image_url, i.seller_id, i.tags, i.status, 
                        COALESCE(i.seller_nickname, u.name, '名無しさん') AS seller_name, i.shipping_days
@@ -107,8 +157,6 @@ def get_items():
     finally:
         connection.close()
 
-
-# 🛍️ 【商品購入処理API】
 @router.post("/api/items/{item_id}/purchase")
 def purchase_item(item_id: int, buyer_data: dict):
     buyer_id = buyer_data.get("buyer_id")
@@ -131,8 +179,6 @@ def purchase_item(item_id: int, buyer_data: dict):
     finally:
         connection.close()
 
-
-# ❤️ 【いいね登録・解除トグルAPI】
 @router.post("/api/items/{item_id}/like")
 def toggle_like(item_id: int, data: dict):
     user_id = data.get("user_id")
@@ -152,8 +198,6 @@ def toggle_like(item_id: int, data: dict):
     finally:
         connection.close()
 
-
-# ❤️ 【いいねした商品一覧取得API】
 @router.get("/api/users/{user_id}/likes")
 def get_user_likes(user_id: int):
     connection = get_db_connection()
@@ -169,8 +213,6 @@ def get_user_likes(user_id: int):
     finally:
         connection.close()
 
-
-# 👁️ 【閲覧履歴記録API】
 @router.post("/api/items/{item_id}/view")
 def record_item_view(item_id: int, data: dict):
     user_id = data.get("user_id")
@@ -184,8 +226,6 @@ def record_item_view(item_id: int, data: dict):
     finally:
         connection.close()
 
-
-# ユーザーの閲覧履歴（最新20件）を取得するAPI
 @router.get("/api/users/{user_id}/views")
 def get_user_views(user_id: int):
     connection = get_db_connection()
@@ -205,7 +245,6 @@ def get_user_views(user_id: int):
     finally:
         connection.close()
 
-# ユーザーの購入履歴を取得するAPI
 @router.get("/api/users/{user_id}/purchases")
 def get_user_purchases(user_id: int):
     connection = get_db_connection()
@@ -224,7 +263,6 @@ def get_user_purchases(user_id: int):
     finally:
         connection.close()
 
-# 🆕 【追加：ユーザー個人の出品履歴を取得するAPI】
 @router.get("/api/users/{user_id}/products")
 def get_user_products(user_id: int):
     connection = get_db_connection()
