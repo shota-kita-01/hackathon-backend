@@ -5,28 +5,37 @@ from db import get_db_connection, client
 
 router = APIRouter()
 
-# ==================================================
-# 📦 【新設】AIカタログ商品API（Amazon 320件データ用）
+# ===================================================
+# 📦 1. AIカタログ商品API（Amazon 320件データ用 / 構造統一版）
 # ===================================================
 
 @router.get("/api/products")
 def get_all_products():
     """
-    フロントエンドのホーム画面や検索画面で、
-    今回インポートした320件のAI特権データをズラッと一覧表示するためのAPI
+    今回インポートした320件のAI特権データを、
+    フリマ商品（items）と100%同じデータ構造に化けさせて一括取得するAPI
     """
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 💡 通信軽量化のため、重たい embedding（ベクトル）は除外して取得します
+            # 💡 喜多さんの指定したルール通りにSQLの「AS（エイリアス）」を使ってデータを整形
             sql = """
-                SELECT asin, name, price, ai_category, description, image_url 
+                SELECT 
+                    id AS id,                         -- Cloud SQL側で自動生成した本物の通し番号id
+                    asin AS asin,                     -- 元のASINも連携用に残します
+                    name AS name, 
+                    price AS price, 
+                    ai_category AS tags,              -- カテゴリを tags にマッピング
+                    description AS description, 
+                    image_url AS image_url, 
+                    'on_sale' AS status,              -- 常に 'on_sale' を動的に生成
+                    'Amazon公式' AS seller_name,       -- 出品者名を固定文字で生成
+                    '1〜2日で発送' AS shipping_days     -- 発送日数も生成
                 FROM products;
             """
             cursor.execute(sql)
             products = cursor.fetchall()
             
-            # フロントエンドが扱いやすいようにオブジェクト形式で返却
             return {
                 "status": "success",
                 "count": len(products),
@@ -42,13 +51,25 @@ def get_all_products():
 @router.get("/api/products/{asin}")
 def get_product_detail(asin: str):
     """
-    商品詳細画面へ遷移したときに、そのASINのプレーンな商品情報を取得するAPI
+    商品詳細画面へ遷移したときに、そのASINの商品情報を
+    フリマ商品と100%同じデータ構造に化けさせて単件取得するAPI
     """
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
+            # 💡 🆕 詳細画面でも一覧と全く同じキー名で返却するようにSQLを最適化！
             sql = """
-                SELECT asin, name, price, ai_category, description, image_url 
+                SELECT 
+                    id AS id,
+                    asin AS asin,
+                    name AS name, 
+                    price AS price, 
+                    ai_category AS tags,
+                    description AS description, 
+                    image_url AS image_url, 
+                    'on_sale' AS status,
+                    'Amazon公式' AS seller_name,
+                    '1〜2日で発送' AS shipping_days
                 FROM products 
                 WHERE asin = %s;
             """
@@ -64,7 +85,7 @@ def get_product_detail(asin: str):
 
 
 # ===================================================
-# 🧠 既存機能：AI自動生成 ＆ 価格査定API（完全維持）
+# 🧠 2. 既存機能：AI自動生成 ＆ 価格査定API（完全維持）
 # ===================================================
 
 @router.post("/api/ai/suggest-description")
@@ -115,7 +136,7 @@ def suggest_price(data: dict):
 
 
 # ===================================================
-# 🛍️ 既存機能：C2C ユーザー出品・売買・履歴API（完全維持）
+# 🛍️ 3. 既存機能：C2C ユーザー出品・売買・履歴API（完全維持）
 # ===================================================
 
 @router.post("/api/items")
@@ -142,15 +163,27 @@ def create_item(item_data: dict):
     finally:
         connection.close()
 
+
 @router.get("/api/items")
 def get_items():
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
+            # 💡 フロントのために、Amazonデータと完全に同じカラム名・同じ順番で並び替えて返却！
             sql = """
-                SELECT i.id, i.name, i.description, i.price, i.image_url, i.seller_id, i.tags, i.status, 
-                       COALESCE(i.seller_nickname, u.name, '名無しさん') AS seller_name, i.shipping_days
-                FROM items i LEFT JOIN users u ON i.seller_id = u.id ORDER BY i.id DESC
+                SELECT 
+                    i.id AS id,                                                     -- フリマの通し番号id
+                    i.name AS name, 
+                    i.price AS price, 
+                    i.tags AS tags, 
+                    i.description AS description, 
+                    i.image_url AS image_url, 
+                    i.status AS status, 
+                    COALESCE(i.seller_nickname, u.name, '名無しさん') AS seller_name, -- 出品者名
+                    i.shipping_days AS shipping_days                                -- 発送日数
+                FROM items i 
+                LEFT JOIN users u ON i.seller_id = u.id 
+                ORDER BY i.id DESC;
             """
             cursor.execute(sql)
             return cursor.fetchall()
