@@ -4,10 +4,25 @@ import sys
 import pymysql
 from google import genai  
 
+# ==========================================
+# ⚙️ 設定 ＆ .env自動ロードセクション
+# ==========================================
+# 💡 これを追加！db.pyを単体起動したときも、.envの設定を100%読み込みます
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+env_path = os.path.join(BASE_DIR, ".env")
+
+if os.path.exists(env_path):
+    with open(env_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, val = line.split("=", 1)
+                os.environ[key.strip()] = val.strip().strip('"').strip("'")
+
 # 🧠 Geminiクライアントの初期化
 client = genai.Client()
 
-# データベース接続関数（ロジックは完全維持です！）
+# データベース接続関数
 def get_db_connection():
     user = os.getenv("MYSQL_USER")
     password = os.getenv("MYSQL_PWD")
@@ -25,6 +40,7 @@ def get_db_connection():
             cursorclass=pymysql.cursors.DictCursor
         )
     else:
+        # 💡 ここで .env から読み込んだパブリックIPが正確に適用されるようになります！
         return pymysql.connect(
             host=host_env or "127.0.0.1",
             user=user,
@@ -35,7 +51,7 @@ def get_db_connection():
         )
 
 # ==========================================
-# 🚀 🆕 成果物JSONをDBへUPSERT（追記・更新）する関数
+# 🚀 成果物JSONをDBへUPSERT（追記・更新）する関数
 # ==========================================
 def import_hybrid_items(json_file_path):
     """
@@ -50,14 +66,10 @@ def import_hybrid_items(json_file_path):
     with open(json_file_path, "r", encoding="utf-8") as f:
         items = json.load(f)
 
-    print(f"🔌 データベースに接続中...")
+    print(f"🔌 クラウドデータベース（Cloud SQL）に接続中...")
     connection = get_db_connection()
     
-    # 💡 MySQLで最も安全にベクトルを扱うハック：
-    # 768次元リストを json.dumps() で文字列化して TEXT/JSON 型に突っ込みます。
-    # あとで推薦エンジン側で取り出す時に、json.loads() で一瞬でPythonのリストに戻せます。
-    
-    # MySQLの標準的なUPSERT構文（ON DUPLICATE KEY UPDATE）
+    # MySQLの標準的なUPSERT構文
     sql = """
         INSERT INTO products (
             asin, name_en, name, ai_category, price, 
@@ -74,7 +86,6 @@ def import_hybrid_items(json_file_path):
     try:
         with connection.cursor() as cursor:
             for item in items:
-                # 768次元のfloat配列を文字列にキャスト
                 embedding_str = json.dumps(item["embedding"])
                 
                 params = (
@@ -91,9 +102,8 @@ def import_hybrid_items(json_file_path):
                 cursor.execute(sql, params)
                 success_count += 1
                 
-        # コミットして物理ディスクに完全に書き込む
         connection.commit()
-        print(f"✨ 成功：{success_count} 件の商品データをインポート/更新しました！")
+        print(f"✨ 成功：{success_count} 件の商品データを Cloud SQL へインポート/更新しました！")
         
     except Exception as e:
         connection.rollback()
@@ -101,9 +111,7 @@ def import_hybrid_items(json_file_path):
     finally:
         connection.close()
 
-# 💡 ターミナルからこのスクリプトを直接叩いてインポートできるようにする機構
 if __name__ == "__main__":
-    # コマンドライン引数にファイル名が指定されているかチェック
     if len(sys.argv) > 1:
         target_file = sys.argv[1]
         import_hybrid_items(target_file)
