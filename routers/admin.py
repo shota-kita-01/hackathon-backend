@@ -53,16 +53,28 @@ def import_merrec_to_cloud_sql():
                 
                 description = f"【カテゴリ】{c0} > {c1} > {c2}\n【ブランド】{brand}\n【商品の状態】{row['item_condition_name']}"
                 
+                # 💡 🆕 新設された tags, seller_nickname, shipping_days も一緒に初期データとして流し込みます！
                 sql = """
-                    INSERT INTO items (name, description, price, image_url, seller_id, status)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    INSERT INTO items (name, description, price, image_url, seller_id, status, tags, seller_nickname, shipping_days)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 raw_price = row['price'] if pd.notna(row['price']) else 10
                 price = int(raw_price * 150) if raw_price > 0 else 1500
                 image_url = preset_images[img_idx % len(preset_images)]
                 img_idx += 1
                 
-                cursor.execute(sql, (row['name'], description, price, image_url, 1, "on_sale"))
+                # メルカリのカテゴリ(c0)をタグとして流用
+                cursor.execute(sql, (
+                    row['name'], 
+                    description, 
+                    price, 
+                    image_url, 
+                    1, 
+                    "on_sale",
+                    c0,            # tags
+                    "メルカリ公式", # seller_nickname
+                    "2〜3日で発送"  # shipping_days
+                ))
                 inserted_count += 1
                 
             cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
