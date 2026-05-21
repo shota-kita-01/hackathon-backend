@@ -1,4 +1,6 @@
 from fastapi import APIRouter, HTTPException
+from google.genai import types
+# db.py から新しくなった Gemini の client をインポートします
 from db import get_db_connection, client
 
 router = APIRouter()
@@ -10,23 +12,21 @@ def suggest_description(data: dict):
     if not item_name: raise HTTPException(status_code=400, detail="商品名が必要です")
     
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an expert copywriter for a global fashion e-commerce marketplace.\n"
-                        "Generate a professional, appealing, and clean English product description based on the product name provided.\n"
-                        "Include sections like [Overview], [Features], and [Styling Tips] if applicable.\n"
-                        "Output ONLY the generated description. No markdown block wrappers (like ```), no conversational text."
-                    )
-                },
-                {"role": "user", "content": f"Product Name: {item_name}"}
-            ],
-            temperature=0.7,
+        # 🔄 Gemini の generate_content 記法に書き換え
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"Product Name: {item_name}",
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are an expert copywriter for a global fashion e-commerce marketplace.\n"
+                    "Generate a professional, appealing, and clean English product description based on the product name provided.\n"
+                    "Include sections like [Overview], [Features], and [Styling Tips] if applicable.\n"
+                    "Output ONLY the generated description. No markdown block wrappers (like ```), no conversational text."
+                ),
+                temperature=0.7,
+            )
         )
-        return {"status": "success", "description": response.choices[0].message.content.strip()}
+        return {"status": "success", "description": response.text.strip()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -37,23 +37,21 @@ def suggest_price(data: dict):
     if not item_name: raise HTTPException(status_code=400, detail="商品名が必要です")
     
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an AI price valuation engine for a fashion marketplace.\n"
-                        "Analyze the given product name and estimate its fair market value in US Dollars (USD).\n"
-                        "Output ONLY a single integer representing the dollar amount. Do not include '$', text, or any punctuation.\n"
-                        "Example: if you think it's worth $45, output '45'."
-                    )
-                },
-                {"role": "user", "content": f"Product Name: {item_name}"}
-            ],
-            temperature=0.3,
+        # 🔄 Gemini の generate_content 記法に書き換え
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"Product Name: {item_name}",
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are an AI price valuation engine for a fashion marketplace.\n"
+                    "Analyze the given product name and estimate its fair market value in US Dollars (USD).\n"
+                    "Output ONLY a single integer representing the dollar amount. Do not include '$', text, or any punctuation.\n"
+                    "Example: if you think it's worth $45, output '45'."
+                ),
+                temperature=0.3,
+            )
         )
-        usd_price = int(response.choices[0].message.content.strip())
+        usd_price = int(response.text.strip())
         # デモ用に1ドル=150円換算の日本円にしてフロントに返す
         jpy_price = usd_price * 150
         return {"status": "success", "suggested_price": jpy_price}
