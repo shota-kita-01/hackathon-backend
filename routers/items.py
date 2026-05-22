@@ -171,7 +171,7 @@ def get_user_products(user_id: int):
 
 
 # ===================================================
-# 🔍 【🆕新設】検索キーワード履歴 記録 ＆ 取得API
+# 🔍 検索キーワード履歴 記録 ＆ 取得API
 # ===================================================
 
 @router.post("/api/users/{user_id}/keywords")
@@ -184,7 +184,6 @@ def record_search_keyword(user_id: int, data: dict):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 競合を防ぐテーブル制約を考慮しつつインサート
             try:
                 cursor.execute("""
                     INSERT INTO search_keywords (user_id, keyword) 
@@ -213,7 +212,6 @@ def get_search_keywords(user_id: int):
                 """, (user_id,))
                 return cursor.fetchall()
             except Exception as e:
-                # テーブルが未作成の場合のフォールバック
                 print(f"⚠️ キーワード履歴テーブルにアクセスできません。空配列を返します: {e}")
                 return []
     finally:
@@ -221,7 +219,7 @@ def get_search_keywords(user_id: int):
 
 
 # ===================================================
-# 🛍️ 3. 購入・いいね・履歴API（エラーを完全ブロックする防弾仕様）
+# 🛍️ 3. 購入・いいね・履歴API（SQL根本治療完了に伴う、完全クリーン版修正項目）
 # ===================================================
 
 @router.post("/api/items/{item_id}/purchase")
@@ -241,11 +239,8 @@ def purchase_item(item_id: int, buyer_data: dict):
             # ① 対象商品のステータスを売り切れに更新
             cursor.execute("UPDATE products SET status = 'sold_out' WHERE id = %s", (item_id,))
             
-            # ② 外部キーの競合を防ぎつつ、購入ログを格納
-            try:
-                cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
-            except Exception as e:
-                print(f"⚠️ 統計用トランザクション記録を安全にスキップしました: {e}")
+            # 💡 【クリーン化】リレーションが直ったので、自信を持ってダイレクトにインサート！
+            cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
 
             connection.commit()
             return {"status": "success", "message": "商品の購入が完了しました！"}
@@ -268,10 +263,8 @@ def toggle_like(item_id: int, data: dict):
                 cursor.execute("DELETE FROM likes WHERE user_id = %s AND item_id = %s", (user_id, item_id))
                 like_status = "unliked"
             else:
-                try:
-                    cursor.execute("INSERT INTO likes (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
-                except Exception as e:
-                    print(f"⚠️ お気に入りお試し登録を安全にスキップしました: {e}")
+                # 💡 【クリーン化】ダミーハンドリングを撤去し、直接スマートにインサート
+                cursor.execute("INSERT INTO likes (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
                 like_status = "liked"
                 
             connection.commit()
@@ -308,10 +301,8 @@ def record_item_view(item_id: int, data: dict):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            try:
-                cursor.execute("INSERT INTO item_views (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
-            except Exception as e:
-                print(f"⚠️ 閲覧統計へのデータフィードを安全にスキップしました: {e}")
+            # 💡 【クリーン化】こちらも直接安全に書き込み
+            cursor.execute("INSERT INTO item_views (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
             
             connection.commit()
             return {"status": "success"}
@@ -404,7 +395,7 @@ def suggest_price(data: dict):
 以下の商品名と詳細な商品説明を分析し、現在の日本のフリマ市場における「適正な販売価格（日本円）」を査定してください。
 ブランドの価値、商品の状態（傷や汚れの有無）、素材などを総合的に判断し、最も売れやすいリアルな価格を算出してください。
 
-出力は査定した金額の「数字（整数）」のみとしてください。「円」や「¥」、カンマ（,）、その他のテキストは絶対に含めないでください。
+出力は査定した金額の「数字（整数）」のみとしてください。「円」や「¥ Pia」、カンマ（,）、その他のテキストは絶対に含めないでください。
 例：4500円が適正だと判断した場合は「4500」とだけ出力してください。
 
 商品名: {item_name}
