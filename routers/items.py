@@ -171,7 +171,55 @@ def get_user_products(user_id: int):
 
 
 # ===================================================
-# 🛍️ 3. 購入・いいね・履歴API（エラーを完全ブロックする防弾仕様）
+# 🔍 検索キーワード履歴 記録 ＆ 取得API
+# ===================================================
+
+@router.post("/api/users/{user_id}/keywords")
+def record_search_keyword(user_id: int, data: dict):
+    """ユーザーがAI検索（Ask AI）を行ったキーワードをログとしてDBへ格納"""
+    keyword = data.get("keyword")
+    if not keyword or not keyword.strip():
+        return {"status": "skipped", "message": "空のキーワードです"}
+    
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            try:
+                cursor.execute("""
+                    INSERT INTO search_keywords (user_id, keyword) 
+                    VALUES (%s, %s)
+                """, (user_id, keyword.strip()))
+                connection.commit()
+                return {"status": "success"}
+            except Exception as e:
+                print(f"⚠️ キーワード保存を安全にスキップしました: {e}")
+                return {"status": "skipped"}
+    finally:
+        connection.close()
+
+
+@router.get("/api/users/{user_id}/keywords")
+def get_search_keywords(user_id: int):
+    """ユーザーの過去の検索キーワード履歴を最新15件取得"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            try:
+                cursor.execute("""
+                    SELECT keyword FROM search_keywords 
+                    WHERE user_id = %s 
+                    ORDER BY id DESC LIMIT 15
+                """, (user_id,))
+                return cursor.fetchall()
+            except Exception as e:
+                print(f"⚠️ キーワード履歴テーブルにアクセスできません。空配列を返します: {e}")
+                return []
+    finally:
+        connection.close()
+
+
+# ===================================================
+# 🛍️ 3. 購入・いいね・履歴API（SQL根本治療完了に伴う、完全クリーン版修正項目）
 # ===================================================
 
 @router.post("/api/items/{item_id}/purchase")
@@ -191,11 +239,8 @@ def purchase_item(item_id: int, buyer_data: dict):
             # ① 対象商品のステータスを売り切れに更新
             cursor.execute("UPDATE products SET status = 'sold_out' WHERE id = %s", (item_id,))
             
-            # ② 外部キーの競合を防ぎつつ、購入ログを格納
-            try:
-                cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
-            except Exception as e:
-                print(f"⚠️ 統計用トランザクション記録を安全にスキップしました: {e}")
+            # 💡 【クリーン化】リレーションが直ったので、自信を持ってダイレクトにインサート！
+            cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
 
             connection.commit()
             return {"status": "success", "message": "商品の購入が完了しました！"}
@@ -218,10 +263,8 @@ def toggle_like(item_id: int, data: dict):
                 cursor.execute("DELETE FROM likes WHERE user_id = %s AND item_id = %s", (user_id, item_id))
                 like_status = "unliked"
             else:
-                try:
-                    cursor.execute("INSERT INTO likes (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
-                except Exception as e:
-                    print(f"⚠️ お気に入りお試し登録を安全にスキップしました: {e}")
+                # 💡 【クリーン化】ダミーハンドリングを撤去し、直接スマートにインサート
+                cursor.execute("INSERT INTO likes (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
                 like_status = "liked"
                 
             connection.commit()
@@ -258,10 +301,8 @@ def record_item_view(item_id: int, data: dict):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            try:
-                cursor.execute("INSERT INTO item_views (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
-            except Exception as e:
-                print(f"⚠️ 閲覧統計へのデータフィードを安全にスキップしました: {e}")
+            # 💡 【クリーン化】こちらも直接安全に書き込み
+            cursor.execute("INSERT INTO item_views (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
             
             connection.commit()
             return {"status": "success"}
@@ -324,7 +365,6 @@ def suggest_description(data: dict):
     if not item_name: 
         raise HTTPException(status_code=400, detail="商品名が必要です")
     try:
-        # 💡 プロンプトを日本語で直接指示するように書き換え！
         prompt = f"""あなたは人気のフリマアプリで活躍する熟練のコピーライターです。
 以下の商品名をもとに、購入者の心を惹きつける魅力的で自然な日本語の商品説明文を作成してください。
 必要に応じて【商品の魅力】【特徴】【おすすめの着用シーン】などの見出しを使って見やすく整理してください。
@@ -347,17 +387,15 @@ def suggest_price(data: dict):
     item_name = data.get("name")
     item_description = data.get("description")
     
-    # 💡 商品名と商品説明の両方が揃っているか厳密にチェック
     if not item_name or not item_description: 
         raise HTTPException(status_code=400, detail="商品名と商品説明の両方が必要です")
         
     try:
-        # 💡 プロンプトも完全に日本語化し、日本のフリマ市場の相場（日本円）を直接査定させる！
         prompt = f"""あなたは日本のファッション・フリマ市場（メルカリやヤフオクなど）に精通したAI査定士です。
 以下の商品名と詳細な商品説明を分析し、現在の日本のフリマ市場における「適正な販売価格（日本円）」を査定してください。
 ブランドの価値、商品の状態（傷や汚れの有無）、素材などを総合的に判断し、最も売れやすいリアルな価格を算出してください。
 
-出力は査定した金額の「数字（整数）」のみとしてください。「円」や「¥」、カンマ（,）、その他のテキストは絶対に含めないでください。
+出力は査定した金額の「数字（整数）」のみとしてください。「円」や「¥ Pia」、カンマ（,）、その他のテキストは絶対に含めないでください。
 例：4500円が適正だと判断した場合は「4500」とだけ出力してください。
 
 商品名: {item_name}
@@ -368,7 +406,6 @@ def suggest_price(data: dict):
             contents=prompt,
             config=types.GenerateContentConfig(temperature=0.3)
         )
-        # 💡 AIが直接「日本円」を出力するので、150を掛ける必要がなくなります！
         jpy_price = int(response.text.strip())
         return {"status": "success", "suggested_price": jpy_price}
     except Exception as e:
