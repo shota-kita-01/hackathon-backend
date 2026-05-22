@@ -2,34 +2,59 @@ from fastapi import APIRouter, Request, HTTPException
 
 router = APIRouter()
 
-@router.get("/api/recommendations/{asin}")
-def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
+# ===================================================
+# 🧠 1. 検索画面用：AI Mood ベクトル検索エンドポイント（🆕 追加）
+# ===================================================
+@router.post("/api/recommend")
+def get_mood_recommendations(data: dict, request: Request):
     """
-    フロントエンドから商品のID(asin)を受け取り、
-    空間的類似（コサイン類似度）と確率的時間遷移（マルコフ連鎖）の
-    2つの独立したレコメンド・カルーセルデータを返す神エンドポイント
+    フロントの『Ask AI ✨』から mood_text を受け取り、
+    Geminiでベクトル化して、Amazonデータ320件とコサイン類似度検索を行う窓口
     """
+    mood_text = data.get("mood_text")
+    if not mood_text:
+        raise HTTPException(status_code=400, detail="mood_textが必要です")
+        
     try:
-        # main.py の lifespan でグローバルステートに仕込んだエンジンを安全に召喚
-        # 💡 万が一の初期化漏れを防ぐセーフティを追加
+        # 常駐しているエンジンを召喚
         if not hasattr(request.app.state, "recommend_engine") or request.app.state.recommend_engine is None:
-            raise HTTPException(
-                status_code=500,
-                detail="レコメンドエンジンがアプリケーションのステートに初期化されていません。main.pyのlifespanを確認してください。"
-            )
+            raise HTTPException(status_code=500, detail="レコメンドエンジンが初期化されていません")
             
         engine = request.app.state.recommend_engine
         
-        # 推薦エンジンから2つのカルーセルを動的に計算
+        # 💡 エンジンのテキスト検索メソッドを呼び出す
+        # ※もしエンジン側のメソッド名が異なる場合は、ここの関数名を微調整してください（例: query_by_text など）
+        recommended_products = engine.get_products_by_mood(mood_text, top_n=20)
+        
+        # フロントがそのままループ（map）で回せるように、商品の配列をそのまま返却します
+        return recommended_products
+
+    except Exception as e:
+        print(f"🔥 Mood Recommend Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===================================================
+# 🛰️ 2. 詳細画面用：確率的時間遷移 ＆ 空間的類似エンドポイント
+# ===================================================
+@router.get("/api/recommendations/{asin}")
+def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
+    """
+    商品詳細画面で、空間的類似（コサイン類似度）と確率的時間遷移（マルコフ連鎖）の
+    2つの独立したレコメンド・カルーセルデータを返すエンドポイント
+    """
+    try:
+        if not hasattr(request.app.state, "recommend_engine") or request.app.state.recommend_engine is None:
+            raise HTTPException(status_code=500, detail="レコメンドエンジンが初期化されていません")
+            
+        engine = request.app.state.recommend_engine
+        
+        # 💡 こちらはASIN（商品）を起点にした回遊・類似検索
         carousel_1, carousel_2 = engine.get_recommendations(asin, top_n=top_n)
         
         if carousel_1 is None or carousel_2 is None:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"指定された商品（ASIN: {asin}）がマスターデータに存在しません。"
-            )
+            raise HTTPException(status_code=404, detail=f"指定された商品（ASIN: {asin}）が存在しません")
             
-        # 喜多さんの指定したフロントエンドが喜ぶネスト構造のまま綺麗なJSONでリターン
         return {
             "target_asin": asin,
             "carousel_space_similarity": {
