@@ -22,8 +22,8 @@ def get_mood_recommendations(data: RecommendRequest, request: Request):
             
         engine = request.app.state.recommend_engine
         
-        # まずはAIに少し多め（50件）に類似商品を計算してもらう
-        recommended_products = engine.get_products_by_mood(data.mood_text, top_n=50)
+        # AIに少し多め（500件）に類似商品を計算してもらう
+        recommended_products = engine.get_products_by_mood(data.mood_text, top_n=500)
         
         # フロントからの絞り込み（filter_status）を適用！
         if data.filter_status == "active":
@@ -31,8 +31,8 @@ def get_mood_recommendations(data: RecommendRequest, request: Request):
         elif data.filter_status == "sold_out":
             recommended_products = [p for p in recommended_products if p["status"] == "sold_out"]
             
-        # 最終的に上位20件をフロントへ返却
-        return recommended_products[:20]
+        # 最終的に上位500件をフロントへ返却
+        return recommended_products[:500]
 
     except Exception as e:
         print(f"🔥 Mood Recommend Error: {e}")
