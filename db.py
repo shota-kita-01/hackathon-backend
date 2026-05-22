@@ -20,7 +20,7 @@ if os.path.exists(env_path):
                 os.environ[key.strip()] = val.strip().strip('"').strip("'")
 
 # 🧠 Geminiクライアントの初期化
-client = genai.Client()
+client = genai.Client(http_options={'api_version': 'v1'})
 
 # データベース接続関数
 def get_db_connection():
