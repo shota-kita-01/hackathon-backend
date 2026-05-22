@@ -315,7 +315,7 @@ def get_user_purchases(user_id: int):
 
 
 # ===================================================
-# 🧠 4. AI商品説明自動生成 ＆ 価格査定（フリマアプリ最適化・v1対応版）
+# 🧠 4. AI商品説明自動生成 ＆ 価格査定（完全日本語・フリマ特化版）
 # ===================================================
 
 @router.post("/api/ai/suggest-description")
@@ -324,13 +324,13 @@ def suggest_description(data: dict):
     if not item_name: 
         raise HTTPException(status_code=400, detail="商品名が必要です")
     try:
-        # 💡 system_instruction をやめて、1つの巨大なテキストに合体！
-        prompt = f"""You are an expert copywriter for a global fashion e-commerce marketplace.
-Generate a professional, appealing, and clean English product description based on the product name provided.
-Include sections like [Overview], [Features], and [Styling Tips] if applicable.
-Output ONLY the generated description. No markdown block wrappers (like ```), no conversational text.
+        # 💡 プロンプトを日本語で直接指示するように書き換え！
+        prompt = f"""あなたは人気のフリマアプリで活躍する熟練のコピーライターです。
+以下の商品名をもとに、購入者の心を惹きつける魅力的で自然な日本語の商品説明文を作成してください。
+必要に応じて【商品の魅力】【特徴】【おすすめの着用シーン】などの見出しを使って見やすく整理してください。
+出力は生成された説明文のみとし、マークダウンのブロック（```など）や、「承知しました」などの余計な会話文は絶対に含めないでください。
 
-Product Name: {item_name}"""
+商品名: {item_name}"""
 
         response = client.models.generate_content(
             model="gemini-2.5-flash",
@@ -345,23 +345,31 @@ Product Name: {item_name}"""
 @router.post("/api/ai/suggest-price")
 def suggest_price(data: dict):
     item_name = data.get("name")
-    if not item_name: 
-        raise HTTPException(status_code=400, detail="商品名が必要です")
+    item_description = data.get("description")
+    
+    # 💡 商品名と商品説明の両方が揃っているか厳密にチェック
+    if not item_name or not item_description: 
+        raise HTTPException(status_code=400, detail="商品名と商品説明の両方が必要です")
+        
     try:
-        # 💡 こちらも指示と商品名を合体！
-        prompt = f"""You are an AI price valuation engine for a fashion marketplace.
-Analyze the given product name and estimate its fair market value in US Dollars (USD).
-Output ONLY a single integer representing the dollar amount. Do not include '$', text, or any punctuation.
-Example: if you think it's worth $45, output '45'.
+        # 💡 プロンプトも完全に日本語化し、日本のフリマ市場の相場（日本円）を直接査定させる！
+        prompt = f"""あなたは日本のファッション・フリマ市場（メルカリやヤフオクなど）に精通したAI査定士です。
+以下の商品名と詳細な商品説明を分析し、現在の日本のフリマ市場における「適正な販売価格（日本円）」を査定してください。
+ブランドの価値、商品の状態（傷や汚れの有無）、素材などを総合的に判断し、最も売れやすいリアルな価格を算出してください。
 
-Product Name: {item_name}"""
+出力は査定した金額の「数字（整数）」のみとしてください。「円」や「¥」、カンマ（,）、その他のテキストは絶対に含めないでください。
+例：4500円が適正だと判断した場合は「4500」とだけ出力してください。
+
+商品名: {item_name}
+商品説明: {item_description}"""
 
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(temperature=0.3)
         )
-        usd_price = int(response.text.strip())
-        return {"status": "success", "suggested_price": usd_price * 150}
+        # 💡 AIが直接「日本円」を出力するので、150を掛ける必要がなくなります！
+        jpy_price = int(response.text.strip())
+        return {"status": "success", "suggested_price": jpy_price}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
