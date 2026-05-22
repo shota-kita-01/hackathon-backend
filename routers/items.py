@@ -6,7 +6,7 @@ import uuid
 router = APIRouter()
 
 # ===================================================
-# 📦 1. AIカタログ商品一覧 ＆ 詳細API（Amazon専用）
+# 📦 1. AIカタログ商品一覧 ＆ 詳細API（Amazon完全特化）
 # ===================================================
 
 @router.get("/api/products")
@@ -24,7 +24,7 @@ def get_all_products():
                     ai_category AS tags, 
                     description AS description, 
                     image_url AS image_url, 
-                    status AS status,                  -- 追加した本物のstatus
+                    status AS status,
                     'Amazon公式' AS seller_name, 
                     '1〜2日で発送' AS shipping_days 
                 FROM products;
@@ -66,15 +66,12 @@ def get_product_detail(asin: str):
 
 
 # ===================================================
-# 🛒 2. 既存のフリマ用URL（/api/items）の中身もAmazonに偽装
+# 🛒 2. 既存のフリマ用URL（/api/items）の形骸化（中身はAmazon）
 # ===================================================
 
 @router.get("/api/items")
 def get_items():
-    """
-    フロントの fetchAllItems() がここを叩きにきても、
-    バグらせずにAmazonの商品をそっと返してあげるための優しさのルート
-    """
+    """フロントの fetchAllItems() がここを叩きにきてもAmazonのデータを返して安全に保つ"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -100,7 +97,7 @@ def get_items():
 
 @router.post("/api/items")
 def create_item(item_data: dict):
-    """もしフロントから新規出品されたら、AmazonカタログにダミーASINで追加する"""
+    """フロントからもし新規出品（擬似出品）されたら、AmazonカタログにダミーASINで追加する"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -124,7 +121,7 @@ def create_item(item_data: dict):
 
 
 # ===================================================
-# 🛍️ 3. 購入・いいね・履歴APIを「Amazonデータ」へ完全最適化
+# 🛍️ 3. 購入・いいね・履歴APIを「Amazonデータ（products）」へ完全最適化
 # ===================================================
 
 @router.post("/api/items/{item_id}/purchase")
@@ -134,6 +131,7 @@ def purchase_item(item_id: int, buyer_data: dict):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
+            # 💡 productsテーブルを見にいくように修正！
             cursor.execute("SELECT status FROM products WHERE id = %s", (item_id,))
             product = cursor.fetchone()
             if not product: raise HTTPException(status_code=404, detail="商品が見つかりません")
@@ -152,7 +150,7 @@ def purchase_item(item_id: int, buyer_data: dict):
 
 @router.post("/api/items/{item_id}/like")
 def toggle_like(item_id: int, data: dict):
-    """Amazon商品に対して『いいね』をトグルする"""
+    """Amazon商品に対して『いいね』を登録・解除する"""
     user_id = data.get("user_id")
     connection = get_db_connection()
     try:
@@ -252,7 +250,7 @@ def get_user_purchases(user_id: int):
 
 @router.get("/api/users/{user_id}/products")
 def get_user_products(user_id: int):
-    """個人出品の履歴タブ用（Amazon専業のため空配列を返却して平和に保つ）"""
+    """個人出品の履歴タブ用（空配列を返却して画面のクラッシュを防ぐ）"""
     return []
 
 
