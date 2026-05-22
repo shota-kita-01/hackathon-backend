@@ -2,7 +2,6 @@ import os
 import json
 import numpy as np
 from fastapi import HTTPException
-# 💡 昨日の成功コードに合わせて types をインポート
 from google.genai import types
 
 def cos_sim(v1, v2):
@@ -13,13 +12,17 @@ class RecommendationEngine:
     def __init__(self):
         print("🧠 レコメンドエンジンを初期化中...")
         
+        # 💡 パスを確実にルートの data/ フォルダへ誘導
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        embeddings_json_path = os.path.join(BASE_DIR, "data", "items_with_embeddings_day_0.json")
+        
+        # 🔥 【修正】昨日15並列で爆速生成した、2200件の最終マスターファイルを指定！
+        embeddings_json_path = os.path.join(BASE_DIR, "data", "items_with_embeddings_all_2200.json")
         fallback_json_path = os.path.join(BASE_DIR, "data", "items_for_db.json")
         
         try:
             with open(embeddings_json_path, "r", encoding="utf-8") as f:
                 self.items = json.load(f)
+            print(f"   ➔ ✨ 2,200件の完全版多次元空間データを正常にメモリーへ展開しました。")
         except FileNotFoundError:
             print(f"⚠️ {embeddings_json_path} が見つからないため、ベースデータでシミュレートします。")
             with open(fallback_json_path, "r", encoding="utf-8") as f:
@@ -37,18 +40,17 @@ class RecommendationEngine:
         with open(matrix_path, "r", encoding="utf-8") as f:
             self.markov_matrix = json.load(f)
             
-        print(f"   ➔ ロード完了: 商品数 {len(self.items)} 件 / マルコフ行列 33x33")
+        # 💡 ログの表記を22x22のリアルな数理モデルに修正
+        print(f"   ➔ ロード完了: 商品数 {len(self.items)} 件 / マルコフ行列 22x22")
 
     # ===================================================
-    # 🧠 「Ask AI ✨」用の自由テキスト検索（昨日大成功した特権モデル完全移植版）
+    # 🧠 「Ask AI ✨」用の自由テキスト検索
     # ===================================================
     def get_products_by_mood(self, mood_text, top_n=20):
         from db import client 
         
         query_vector = None
-        # ─── 🛰️ 昨日の成功体験を完全再現 ───
         try:
-            # 💡 魔法の呪文「gemini-embedding-2」と config を完全移植！
             response = client.models.embed_content(
                 model="gemini-embedding-2",
                 contents=mood_text,
@@ -58,7 +60,6 @@ class RecommendationEngine:
             print("💪 gemini-embedding-2 での特権ベクトル化に成功しました！")
             
         except Exception as e:
-            # ─── 🛡️ 緊急事態：API全滅時の数理キーワードマッチ（保険） ───
             print(f"⚠️ APIエラー({e}): 緊急テキストマッチエンジンを起動します。")
             
             scored_items = []
@@ -93,18 +94,25 @@ class RecommendationEngine:
             scored_items.sort(key=lambda x: x["score"], reverse=True)
             return scored_items[:top_n]
         
-        # ─── 🤖 通常ルート：ベクトルが正常取得できた場合のコサイン類似度計算 ───
+        # ─── 🤖 通常ルート：コサイン類似度計算 ───
         scored_items = []
         for item in self.items:
             v_key = "embedding" if "embedding" in item else ("embeddings" if "embeddings" in item else "vector")
             sim = cos_sim(query_vector, item[v_key])
             
             product_data = {
-                "id": item["id"], "asin": item.get("asin"), "name": item.get("name"),
-                "price": item.get("price"), "tags": item.get("ai_category"),
-                "description": item.get("description"), "image_url": item.get("image_url"),
-                "status": item["status"], "seller_name": "Amazon公式",
-                "shipping_days": "1〜2日で発送", "score": sim
+                "id": item["id"], 
+                "asin": item.get("asin"), 
+                # 💡 フロントエンドの変数名と完全同期させ、確実に日本語版（name）を渡します
+                "name": item.get("name"),
+                "price": item.get("price"), 
+                "tags": item.get("ai_category"),
+                "description": item.get("description"), 
+                "image_url": item.get("image_url"),
+                "status": item["status"], 
+                "seller_name": "Amazon公式",
+                "shipping_days": "1〜2日で発送", 
+                "score": sim
             }
             scored_items.append(product_data)
             
