@@ -315,7 +315,7 @@ def get_user_purchases(user_id: int):
 
 
 # ===================================================
-# 🧠 4. AI商品説明自動生成 ＆ 価格査定（フリマアプリ最適化）
+# 🧠 4. AI商品説明自動生成 ＆ 価格査定（フリマアプリ最適化・v1対応版）
 # ===================================================
 
 @router.post("/api/ai/suggest-description")
@@ -324,18 +324,18 @@ def suggest_description(data: dict):
     if not item_name: 
         raise HTTPException(status_code=400, detail="商品名が必要です")
     try:
+        # 💡 system_instruction をやめて、1つの巨大なテキストに合体！
+        prompt = f"""You are an expert copywriter for a global fashion e-commerce marketplace.
+Generate a professional, appealing, and clean English product description based on the product name provided.
+Include sections like [Overview], [Features], and [Styling Tips] if applicable.
+Output ONLY the generated description. No markdown block wrappers (like ```), no conversational text.
+
+Product Name: {item_name}"""
+
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=f"Product Name: {item_name}",
-            config=types.GenerateContentConfig(
-                system_instruction=(
-                    "You are an expert copywriter for a global fashion e-commerce marketplace.\n"
-                    "Generate a professional, appealing, and clean English product description based on the product name provided.\n"
-                    "Include sections like [Overview], [Features], and [Styling Tips] if applicable.\n"
-                    "Output ONLY the generated description. No markdown block wrappers (like ```), no conversational text."
-                ),
-                temperature=0.7,
-            )
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.7)
         )
         return {"status": "success", "description": response.text.strip()}
     except Exception as e:
@@ -348,18 +348,18 @@ def suggest_price(data: dict):
     if not item_name: 
         raise HTTPException(status_code=400, detail="商品名が必要です")
     try:
+        # 💡 こちらも指示と商品名を合体！
+        prompt = f"""You are an AI price valuation engine for a fashion marketplace.
+Analyze the given product name and estimate its fair market value in US Dollars (USD).
+Output ONLY a single integer representing the dollar amount. Do not include '$', text, or any punctuation.
+Example: if you think it's worth $45, output '45'.
+
+Product Name: {item_name}"""
+
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=f"Product Name: {item_name}",
-            config=types.GenerateContentConfig(
-                system_instruction=(
-                    "You are an AI price valuation engine for a fashion marketplace.\n"
-                    "Analyze the given product name and estimate its fair market value in US Dollars (USD).\n"
-                    "Output ONLY a single integer representing the dollar amount. Do not include '$', text, or any punctuation.\n"
-                    "Example: if you think it's worth $45, output '45'."
-                ),
-                temperature=0.3,
-            )
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.3)
         )
         usd_price = int(response.text.strip())
         return {"status": "success", "suggested_price": usd_price * 150}
