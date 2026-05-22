@@ -76,14 +76,10 @@ def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
 
 
 # ===================================================
-# 🏠 3. ホーム画面用：3段パーソナライズ統合エンドポイント（🆕 新設！）
+# 🏠 3. ホーム画面用：3段パーソナライズ統合エンドポイント
 # ===================================================
 @router.get("/api/home/{user_id}")
 def get_home_dashboard(user_id: int):
-    """
-    ホーム画面用に「あなたへのおすすめ」「あなたの好きカテゴリ」「市場トレンドカテゴリ」
-    の3種類のデータをDBの行動履歴から数理的に算出して一括返却するAPI
-    """
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -101,9 +97,6 @@ def get_home_dashboard(user_id: int):
             """, (user_id, user_id))
             user_cats = cursor.fetchall()
             
-            # 行動履歴があればその1位を、新規ユーザーの場合はデフォルトで "Shoes" をセット
-            user_top_cat = user_cats[0]['ai_category'] if user_cats else "Shoes"
-            
             # 📊 分析2: 市場全体（全ユーザー）の閲覧履歴からトップカテゴリーを抽出
             cursor.execute("""
                 SELECT p.ai_category, COUNT(*) as weight
@@ -116,7 +109,7 @@ def get_home_dashboard(user_id: int):
             market_cat_row = cursor.fetchone()
             market_top_cat = market_cat_row['ai_category'] if market_cat_row else "Electronics"
 
-            # 🛠️ ヘルパー関数: 指定カテゴリーからランダムに5件取得（毎回新鮮なリロード感！）
+            # 🛠️ ヘルパー関数: 指定カテゴリーからランダムに5件取得
             def get_items_by_cat(category, limit=5):
                 cursor.execute("""
                     SELECT id, asin, name, price, ai_category AS tags, description, image_url, status, '公式出品' AS seller_name
@@ -127,7 +120,6 @@ def get_home_dashboard(user_id: int):
                 return cursor.fetchall()
 
             # 🥇 Tier 1: あなたへのおすすめ (Top 5)
-            # ユーザーの好き上位3カテゴリーを混ぜて5件抽出。新規の場合は全体からランダム。
             if user_cats:
                 top_3_cats = [c['ai_category'] for c in user_cats[:3]]
                 format_strings = ','.join(['%s'] * len(top_3_cats))
@@ -145,8 +137,14 @@ def get_home_dashboard(user_id: int):
                 """)
                 personalized_top5 = cursor.fetchall()
 
-            # 🥈 Tier 2: あなたに人気のカテゴリー
-            user_top_cat_items = get_items_by_cat(user_top_cat, 5)
+            # 🥈 Tier 2: あなたに人気のカテゴリー（💡新規ユーザー時は空で返すように洗練！）
+            if user_cats:
+                user_top_cat = user_cats[0]['ai_category']
+                user_top_cat_items = get_items_by_cat(user_top_cat, 5)
+                user_favorite_title = f"👤 あなたに人気のカテゴリー ({user_top_cat})"
+            else:
+                user_top_cat_items = []
+                user_favorite_title = "👤 あなたに人気のカテゴリー"
 
             # 🥉 Tier 3: 市場全体で人気のカテゴリー
             market_top_cat_items = get_items_by_cat(market_top_cat, 5)
@@ -159,7 +157,7 @@ def get_home_dashboard(user_id: int):
                         "items": personalized_top5
                     },
                     "user_favorite": {
-                        "title": f"👤 あなたに人気のカテゴリー ({user_top_cat})",
+                        "title": user_favorite_title,
                         "items": user_top_cat_items
                     },
                     "market_favorite": {
