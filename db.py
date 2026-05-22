@@ -85,6 +85,11 @@ def import_hybrid_items(json_file_path):
     success_count = 0
     try:
         with connection.cursor() as cursor:
+            print("🧹 古いカタログデータの残党を完全にクレンジング中...")
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
+            cursor.execute("TRUNCATE TABLE products;")
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
+            
             for item in items:
                 embedding_str = json.dumps(item["embedding"])
                 
