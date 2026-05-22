@@ -38,22 +38,42 @@ class RecommendationEngine:
         print(f"   ➔ ロード完了: 商品数 {len(self.items)} 件 / マルコフ行列 33x33")
 
     # ===================================================
-    # 🧠 「Ask AI ✨」用の自由テキスト・ベクトル検索（防弾・デバッグ強化版）
+    # 🧠 「Ask AI ✨」用の自由テキスト・ベクトル検索（二段構え完全版）
     # ===================================================
     def get_products_by_mood(self, mood_text, top_n=20):
         from db import client 
         
+        query_vector = None
         try:
-            # 1. ユーザーの入力テキストをベクトル変換
+            # 1. 【第一候補】text-embedding-004 でベクトル化を試みる
             response = client.models.embed_content(
                 model="text-embedding-004",
                 contents=mood_text
             )
             query_vector = response.embeddings[0].values
+            print("💪 text-embedding-004 でのベクトル化に成功しました。")
             
+        except Exception as e1:
+            # 💡 もしGoogle側から404などで拒絶されたら、ここを通過して自動リトライ！
+            print(f"⚠️ text-embedding-004 が拒絶されました({e1})。安定版 embedding-001 でリトライします...")
+            try:
+                # 【第二候補】広く安定稼働している同じ768次元の embedding-001 で再試行
+                response = client.models.embed_content(
+                    model="embedding-001",
+                    contents=mood_text
+                )
+                query_vector = response.embeddings[0].values
+                print("🔥 embedding-001 でのフォールバック注入に成功しました！")
+            except Exception as e2:
+                # 両方全滅した場合のみエラーを吐く
+                error_msg = f"Gemini Embedding API All Failed. e1: {str(e1)}, e2: {str(e2)}"
+                print(f"❌ {error_msg}")
+                raise HTTPException(status_code=500, detail=error_msg)
+        
+        # 2. 全320件の商品と総当たりでコサイン類似度を計算
+        try:
             scored_items = []
             for item in self.items:
-                # 💡 【防弾対策】JSON内のベクトルキー名が 'embedding', 'embeddings', 'vector' のどれであっても救う
                 vector_key = None
                 for key in ["embedding", "embeddings", "vector"]:
                     if key in item:
@@ -61,7 +81,7 @@ class RecommendationEngine:
                         break
                 
                 if vector_key is None:
-                    raise KeyError(f"商品データ内にベクトルキー(embedding等)が見つかりません。存在するキー: {list(item.keys())}")
+                    raise KeyError("商品データ内にベクトルキー(embedding等)が見つかりません。")
                 
                 sim = cos_sim(query_vector, item[vector_key])
                 
@@ -84,10 +104,7 @@ class RecommendationEngine:
             return scored_items[:top_n]
             
         except Exception as e:
-            # 💡 【デバッグ対策】エラーが起きたら詳細な理由をHTTP 500でフロントに返す
-            error_msg = f"Engine Error: {str(e)}"
-            print(f"❌ {error_msg}")
-            raise HTTPException(status_code=500, detail=error_msg)
+            raise HTTPException(status_code=500, detail=f"Calculation Error: {str(e)}")
 
     def get_recommendations(self, target_asin, top_n=3):
         target_item = next((item for item in self.items if item["asin"] == target_asin), None)
