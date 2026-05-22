@@ -312,10 +312,11 @@ def record_item_view(item_id: int, data: dict):
 
 @router.get("/api/users/{user_id}/views")
 def get_user_views(user_id: int):
-    """最近チェックした商品の閲覧履歴（最新20件）を取得"""
+    """最近チェックした商品の閲覧履歴（重複なし・最新100件）を取得"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
+            # 💡 SQLをグループ化し、同じ商品の重複を排除した上で、最新の閲覧日時順（MAX(v.id)）にソートします
             sql = """
                 SELECT 
                     p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
@@ -324,8 +325,9 @@ def get_user_views(user_id: int):
                 FROM item_views v
                 JOIN products p ON v.item_id = p.id
                 WHERE v.user_id = %s
-                ORDER BY v.id DESC
-                LIMIT 20;
+                GROUP BY p.id
+                ORDER BY MAX(v.id) DESC
+                LIMIT 100;
             """
             cursor.execute(sql, (user_id,))
             return cursor.fetchall()
