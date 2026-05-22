@@ -1,33 +1,37 @@
 from fastapi import APIRouter, Request, HTTPException
+from schemas import RecommendRequest  # 💡 作成した型定義をインポート
 
 router = APIRouter()
 
 # ===================================================
-# 🧠 1. 検索画面用：AI Mood ベクトル検索エンドポイント（🆕 追加）
+# 🧠 1. 検索画面用：AI Mood ベクトル検索 ＆ 絞り込み
 # ===================================================
 @router.post("/api/recommend")
-def get_mood_recommendations(data: dict, request: Request):
+def get_mood_recommendations(data: RecommendRequest, request: Request):
     """
-    フロントの『Ask AI ✨』から mood_text を受け取り、
-    Geminiでベクトル化して、Amazonデータ320件とコサイン類似度検索を行う窓口
+    フロントの『Ask AI ✨』から mood_text と filter_status を受け取り、
+    ベクトル検索した上で、ステータス絞り込みを行って返す最強の窓口
     """
-    mood_text = data.get("mood_text")
-    if not mood_text:
+    if not data.mood_text:
         raise HTTPException(status_code=400, detail="mood_textが必要です")
         
     try:
-        # 常駐しているエンジンを召喚
         if not hasattr(request.app.state, "recommend_engine") or request.app.state.recommend_engine is None:
             raise HTTPException(status_code=500, detail="レコメンドエンジンが初期化されていません")
             
         engine = request.app.state.recommend_engine
         
-        # 💡 エンジンのテキスト検索メソッドを呼び出す
-        # ※もしエンジン側のメソッド名が異なる場合は、ここの関数名を微調整してください（例: query_by_text など）
-        recommended_products = engine.get_products_by_mood(mood_text, top_n=20)
+        # 💡 まずはAIに少し多め（50件）に類似商品を計算してもらう
+        recommended_products = engine.get_products_by_mood(data.mood_text, top_n=50)
         
-        # フロントがそのままループ（map）で回せるように、商品の配列をそのまま返却します
-        return recommended_products
+        # 💡 フロントからの絞り込み（filter_status）を適用！
+        if data.filter_status == "active":
+            recommended_products = [p for p in recommended_products if p["status"] == "on_sale"]
+        elif data.filter_status == "sold_out":
+            recommended_products = [p for p in recommended_products if p["status"] == "sold_out"]
+            
+        # 最終的に上位20件をフロントへ返却
+        return recommended_products[:20]
 
     except Exception as e:
         print(f"🔥 Mood Recommend Error: {e}")
@@ -35,21 +39,17 @@ def get_mood_recommendations(data: dict, request: Request):
 
 
 # ===================================================
-# 🛰️ 2. 詳細画面用：確率的時間遷移 ＆ 空間的類似エンドポイント
+# 🛰️ 2. 詳細画面用：確率的時間遷移 ＆ 空間的類似
 # ===================================================
 @router.get("/api/recommendations/{asin}")
 def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
-    """
-    商品詳細画面で、空間的類似（コサイン類似度）と確率的時間遷移（マルコフ連鎖）の
-    2つの独立したレコメンド・カルーセルデータを返すエンドポイント
-    """
+    """詳細画面のカルーセル用データ（変更なし）"""
     try:
         if not hasattr(request.app.state, "recommend_engine") or request.app.state.recommend_engine is None:
             raise HTTPException(status_code=500, detail="レコメンドエンジンが初期化されていません")
             
         engine = request.app.state.recommend_engine
         
-        # 💡 こちらはASIN（商品）を起点にした回遊・類似検索
         carousel_1, carousel_2 = engine.get_recommendations(asin, top_n=top_n)
         
         if carousel_1 is None or carousel_2 is None:

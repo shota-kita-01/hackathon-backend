@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 
 class UserRegister(BaseModel):
     name: str
@@ -13,5 +14,5 @@ class LoginData(BaseModel):
 class RecommendRequest(BaseModel):
     user_id: int
     mood_text: str
-    mode: str
+    # 💥 `mode: str` はフロントから消滅したため削除！
     filter_status: str = "both"
