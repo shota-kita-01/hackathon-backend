@@ -46,7 +46,7 @@ class RecommendationEngine:
     # ===================================================
     # 🧠 「Ask AI ✨」用の自由テキスト検索
     # ===================================================
-    def get_products_by_mood(self, mood_text, top_n=20):
+    def get_products_by_mood(self, mood_text, top_n=500):
         from db import client 
         
         query_vector = None
