@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from google.genai import types
 from db import get_db_connection, client
+import json
 
 router = APIRouter()
 
@@ -24,7 +25,7 @@ def get_all_products():
                     description AS description, 
                     image_url AS image_url, 
                     status AS status,
-                    '新品・未使用' AS item_condition, -- 💡 公式データは一律「新品」として擬似生成
+                    '新品・未使用' AS item_condition, 
                     '公式出品' AS seller_name, 
                     '1〜2日で発送' AS shipping_days 
                 FROM products;
@@ -51,7 +52,7 @@ def get_product_detail(asin: str):
                     description AS description, 
                     image_url AS image_url, 
                     status AS status,
-                    '新品・未使用' AS item_condition, -- 💡 ここにも追加
+                    '新品・未使用' AS item_condition, 
                     '公式出品' AS seller_name,
                     '1〜2日で発送' AS shipping_days
                 FROM products 
@@ -73,14 +74,14 @@ def get_product_detail(asin: str):
 @router.get("/api/items")
 def get_items():
     """
-    運営の初期カタログデータと、ユーザーがアプリから出品した一般データを
-    数理的にガッチャンコして、タイムラインに新着順で一括返却します
+    【改修】公式データと一般出品を合流。
+    💡ID衝突を防ぐため、一般出品のIDに一律 100000 を加算してフロントへ出荷します。
     """
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
             sql = """
-                -- ① 初期配置のカタログデータ（💡 asin をしっかり取得！）
+                -- ① 初期配置のカタログデータ (IDはそのまま)
                 SELECT 
                     id AS id, 
                     asin AS asin, 
@@ -97,9 +98,9 @@ def get_items():
                 
                 UNION ALL
                 
-                -- ② ユーザーが出品したカスタムデータ（💡 列数を合わせるために NULL でプレースホルダーを設置）
+                -- ② ユーザーが出品したカスタムデータ (💡 id + 100000 で仮想空間化！)
                 SELECT 
-                    id AS id, 
+                    id + 100000 AS id, 
                     NULL AS asin, 
                     name AS name, 
                     price AS price, 
@@ -122,17 +123,33 @@ def get_items():
 
 @router.post("/api/items")
 def create_item(item_data: dict):
-    """ユーザーが出品画面から入力した内容を、一般出品テーブル（items）へ安全に格納"""
+    """ユーザーが出品画面から入力した内容を、一般出品テーブル（items）へ格納（変更なし）"""
+    structured_text = f"""
+    Product Characteristics:
+    - Title: {item_data.get("name")}
+    - Category: {item_data.get("tags")}
+    - Core Context: {item_data.get("description")}
+    """
+    try:
+        embed_res = client.models.embed_content(
+            model="gemini-embedding-2",
+            contents=structured_text,
+            config=types.EmbedContentConfig(output_dimensionality=768)
+        )
+        embedding_vector = embed_res.embeddings[0].values
+        embedding_json = json.dumps(embedding_vector)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"【AI空間配置エラー】ベクトルの生成に失敗しました: {str(e)}")
+
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 💡 item_condition を INSERT カラムと VALUES に追加！
             sql = """
                 INSERT INTO items (
                     name, description, price, image_url, 
-                    seller_id, tags, status, item_condition, seller_nickname, shipping_days
+                    seller_id, tags, status, item_condition, seller_nickname, shipping_days, embedding
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, 'on_sale', %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, 'on_sale', %s, %s, %s, %s)
             """
             cursor.execute(sql, (
                 item_data.get("name"),
@@ -141,9 +158,10 @@ def create_item(item_data: dict):
                 item_data.get("image_url"),
                 item_data.get("seller_id"),
                 item_data.get("tags", "一般出品"),
-                item_data.get("item_condition", "目立った傷や汚れなし"), # 💡 フロントから送られてくる状態データを格納
+                item_data.get("item_condition", "目立った傷や汚れなし"),
                 item_data.get("seller_nickname", "名無しさん"),
-                item_data.get("shipping_days", "1〜2日で発送")
+                item_data.get("shipping_days", "1〜2日で発送"),
+                embedding_json
             ))
             connection.commit()
             return {"status": "success", "message": "商品が出品されました！"}
@@ -153,20 +171,20 @@ def create_item(item_data: dict):
 
 @router.get("/api/users/{user_id}/products")
 def get_user_products(user_id: int):
-    """マイページの『出品した商品』タブに、自分が過去に出品した一般データを完全に同期"""
+    """【改修】マイページの出品一覧。ここも仮想ID空間（+100000）に合わせて同期"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
             sql = """
                 SELECT 
-                    id AS id, 
+                    id + 100000 AS id, 
                     name AS name, 
                     price AS price, 
                     tags AS tags, 
                     description AS description, 
                     image_url AS image_url, 
                     status AS status,
-                    item_condition AS item_condition, -- 💡 追加
+                    item_condition AS item_condition, 
                     seller_nickname AS seller_name, 
                     shipping_days AS shipping_days
                 FROM items
@@ -216,23 +234,35 @@ def get_search_keywords(user_id: int):
 
 
 # ===================================================
-# 🛍️ 3. 購入・いいね・履歴API
+# 🛍️ 3. 購入・いいね・履歴API（💡動的ルート切り替え完全搭載！）
 # ===================================================
 
 @router.post("/api/items/{item_id}/purchase")
 def purchase_item(item_id: int, buyer_data: dict):
+    """【改修】IDが10万以上なら一般フリマ商品、未満なら公式カタログ商品へ動的に分岐"""
     buyer_id = buyer_data.get("buyer_id")
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT status FROM products WHERE id = %s", (item_id,))
-            product = cursor.fetchone()
-            if not product: 
-                raise HTTPException(status_code=404, detail="商品が見つかりません")
-            if product["status"] == "sold_out": 
-                raise HTTPException(status_code=400, detail="売り切れています")
+            if item_id >= 100000:
+                # ユーザー一般出品の売切処理
+                raw_id = item_id - 100000
+                cursor.execute("SELECT status FROM items WHERE id = %s", (raw_id,))
+                item = cursor.fetchone()
+                if not item: raise HTTPException(status_code=404, detail="商品が見つかりません")
+                if item["status"] == "sold_out": raise HTTPException(status_code=400, detail="売り切れています")
+                
+                cursor.execute("UPDATE items SET status = 'sold_out' WHERE id = %s", (raw_id,))
+            else:
+                # 公式カタログ商品の売切処理
+                cursor.execute("SELECT status FROM products WHERE id = %s", (item_id,))
+                product = cursor.fetchone()
+                if not product: raise HTTPException(status_code=404, detail="商品が見つかりません")
+                if product["status"] == "sold_out": raise HTTPException(status_code=400, detail="売り切れています")
+                
+                cursor.execute("UPDATE products SET status = 'sold_out' WHERE id = %s", (item_id,))
             
-            cursor.execute("UPDATE products SET status = 'sold_out' WHERE id = %s", (item_id,))
+            # 購入ログにはフロントから来たIDをそのまま突っ込む（後で判別しやすくするため）
             cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
             connection.commit()
             return {"status": "success", "message": "商品の購入が完了しました！"}
@@ -245,6 +275,7 @@ def purchase_item(item_id: int, buyer_data: dict):
 
 @router.post("/api/items/{item_id}/like")
 def toggle_like(item_id: int, data: dict):
+    """【改修】10万以上のIDも競合を起こさずに、そのままいいねの脱着を可能に"""
     user_id = data.get("user_id")
     connection = get_db_connection()
     try:
@@ -265,19 +296,34 @@ def toggle_like(item_id: int, data: dict):
 
 @router.get("/api/users/{user_id}/likes")
 def get_user_likes(user_id: int):
+    """【改修】マイページのいいね一覧を、公式と一般出品のハイブリッド縦積み構造へ拡張"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
             sql = """
+                -- ① 公式データのいいね
                 SELECT 
                     p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
                     p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
-                    p.status AS status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, TRUE AS is_liked
+                    p.status AS status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, TRUE AS is_liked, l.id AS like_log_id
                 FROM likes l 
                 JOIN products p ON l.item_id = p.id
-                WHERE l.user_id = %s ORDER BY l.created_at DESC;
+                WHERE l.user_id = %s AND l.item_id < 100000
+                
+                UNION ALL
+                
+                -- ② 一般ユーザー出品データのいいね (IDを10万の仮想空間に戻す)
+                SELECT 
+                    i.id + 100000 AS id, NULL AS asin, i.name AS name, i.price AS price, 
+                    i.tags AS tags, i.description AS description, i.image_url AS image_url, 
+                    i.status AS status, i.item_condition AS item_condition, i.seller_nickname AS seller_name, TRUE AS is_liked, l.id AS like_log_id
+                FROM likes l 
+                JOIN items i ON (l.item_id - 100000) = i.id
+                WHERE l.user_id = %s AND l.item_id >= 100000
+                
+                ORDER BY like_log_id DESC;
             """
-            cursor.execute(sql, (user_id,))
+            cursor.execute(sql, (user_id, user_id)) # 💡 パラメータを2つセット
             return cursor.fetchall()
     finally:
         connection.close()
@@ -285,6 +331,7 @@ def get_user_likes(user_id: int):
 
 @router.post("/api/items/{item_id}/view")
 def record_item_view(item_id: int, data: dict):
+    """仮想IDのまま閲覧ログへ格納（変更なし。そのまま綺麗に溜まります）"""
     user_id = data.get("user_id")
     connection = get_db_connection()
     try:
@@ -298,23 +345,37 @@ def record_item_view(item_id: int, data: dict):
 
 @router.get("/api/users/{user_id}/views")
 def get_user_views(user_id: int):
-    """最近チェックした商品の閲覧履歴（重複なし・最新50件）を取得"""
+    """【改修】最近チェックした履歴。公式とフリマデータをメモリに干渉させずに綺麗に合流"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
             sql = """
-                SELECT 
-                    p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
-                    p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
-                    p.status AS status, '新品・未使用' AS item_condition, '公式出品' AS seller_name
-                FROM item_views v
-                JOIN products p ON v.item_id = p.id
-                WHERE v.user_id = %s
-                GROUP BY p.id
-                ORDER BY MAX(v.id) DESC
+                SELECT id, asin, name, price, tags, description, image_url, status, item_condition, seller_name
+                FROM (
+                    SELECT p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
+                           p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
+                           p.status AS status, '新品・未使用' AS item_condition, '公式出品' AS seller_name,
+                           MAX(v.id) as max_v_id
+                    FROM item_views v
+                    JOIN products p ON v.item_id = p.id
+                    WHERE v.user_id = %s AND v.item_id < 100000
+                    GROUP BY p.id
+
+                    UNION ALL
+
+                    SELECT i.id + 100000 AS id, NULL AS asin, i.name AS name, i.price AS price, 
+                           i.tags AS tags, i.description AS description, i.image_url AS image_url, 
+                           i.status AS status, i.item_condition AS item_condition, i.seller_nickname AS seller_name,
+                           MAX(v.id) as max_v_id
+                    FROM item_views v
+                    JOIN items i ON (v.item_id - 100000) = i.id
+                    WHERE v.user_id = %s AND v.item_id >= 100000
+                    GROUP BY i.id
+                ) as hybrid_views
+                ORDER BY max_v_id DESC
                 LIMIT 50;
             """
-            cursor.execute(sql, (user_id,))
+            cursor.execute(sql, (user_id, user_id))
             return cursor.fetchall()
     finally:
         connection.close()
@@ -322,20 +383,30 @@ def get_user_views(user_id: int):
 
 @router.get("/api/users/{user_id}/purchases")
 def get_user_purchases(user_id: int):
+    """【改修】マイページの購入履歴。公式カタログ品、一般出品の双方を美しく同時レンダリング"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
             sql = """
-                SELECT 
-                    p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
-                    p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
-                    p.status AS status, '新品・未使用' AS item_condition, '公式出品' AS seller_name
+                SELECT p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
+                       p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
+                       p.status AS status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, pur.id as pur_id
                 FROM purchases pur
                 JOIN products p ON pur.item_id = p.id
-                WHERE pur.buyer_id = %s
-                ORDER BY pur.id DESC;
+                WHERE pur.buyer_id = %s AND pur.item_id < 100000
+                
+                UNION ALL
+                
+                SELECT i.id + 100000 AS id, NULL AS asin, i.name AS name, i.price AS price, 
+                       i.tags AS tags, i.description AS description, i.image_url AS image_url, 
+                       i.status AS status, i.item_condition AS item_condition, i.seller_nickname AS seller_name, pur.id as pur_id
+                FROM purchases pur
+                JOIN items i ON (pur.item_id - 100000) = i.id
+                WHERE pur.buyer_id = %s AND pur.item_id >= 100000
+                
+                ORDER BY pur_id DESC;
             """
-            cursor.execute(sql, (user_id,))
+            cursor.execute(sql, (user_id, user_id))
             return cursor.fetchall()
     finally:
         connection.close()
@@ -355,7 +426,7 @@ def suggest_description(data: dict):
 ユーザーが入力した商品名をもとに、購入者の物欲を極限まで刺激する「そのままコピペして使える完成された商品説明文」を1つだけ作成してください。
 
 【⚠️絶対に守るべき鉄の掟】
-1. 「〇〇の説明文ですね！」などの前置き、挨拶、終わりの会話文は、1文字たりとも出力しないでください。
+1. 「〇〇の説明文ですね！」などの前置き、挨拶、終わりの会話文は、1文字とも出力しないでください。
 2. 「パターン1」「パターン2」などの複数提案や、キャッチコピーの箇条書きは絶対に禁止です。最初から最高の一着としての文章を1パターンだけ作成してください。
 3. 出力するテキストは、フリマの「商品説明欄にそのまま貼り付けられる本文」のみとしてください。
 4. 文字数は200字程度とし、無駄に長く、冗長になることは避けてください。
@@ -371,18 +442,13 @@ def suggest_description(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ===================================================
-# 💰 改修版：AI価格査定API
-# ===================================================
 @router.post("/api/ai/suggest-price")
 def suggest_price(data: dict):
-    # 💡 4つの必須パラメーターをすべてハントする
     item_name = data.get("name")
     item_description = data.get("description")
-    item_category = data.get("tags")            # 選択された22ジャンルの英名
-    item_condition = data.get("item_condition")  # 「新品」「傷あり」などの状態
+    item_category = data.get("tags")            
+    item_condition = data.get("item_condition")  
 
-    # 🛑 【条件分岐】どれか1つでも空、または存在しない場合は即座に親切な指示を返してブロック！
     if not item_name or not item_description or not item_category or not item_condition:
         raise HTTPException(
             status_code=400, 
@@ -390,7 +456,6 @@ def suggest_price(data: dict):
         )
         
     try:
-        # 🧠 カテゴリと状態の重みを加味させる最強のプロンプト
         prompt = f"""あなたは日本のフリマ市場（メルカリやヤフオクなど）の相場・価格決定メカニズムを完璧にハックしている超一流のAI査定士です。
 以下の4つの情報をもとに、現在の日本のリアルなセカンドハンド市場で「最も買い手がつきやすく、かつ損をしない適正な販売価格（日本円）」を査定してください。
 
@@ -409,14 +474,13 @@ def suggest_price(data: dict):
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.3) # 査定のブレをなくすため低めの温度に設定
+            config=types.GenerateContentConfig(temperature=0.3) 
         )
         
         jpy_price = int(response.text.strip())
         return {"status": "success", "suggested_price": jpy_price}
         
     except ValueError:
-        # 万が一AIが数字以外を返してきた場合のセーフティネット
         raise HTTPException(status_code=500, detail="AIが有効な数値を生成できませんでした。もう一度お試しください。")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
