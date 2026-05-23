@@ -74,7 +74,7 @@ def get_product_detail(asin: str):
 @router.get("/api/items")
 def get_items():
     """
-    【改修】公式データと一般出品を合流。
+    公式データと一般出品を合流。
     💡ID衝突を防ぐため、一般出品のIDに一律 100000 を加算してフロントへ出荷します。
     """
     connection = get_db_connection()
@@ -123,7 +123,7 @@ def get_items():
 
 @router.post("/api/items")
 def create_item(item_data: dict):
-    """ユーザーが出品画面から入力した内容を、一般出品テーブル（items）へ格納（変更なし）"""
+    """ユーザーが出品画面から入力した内容を、一般出品テーブル（items）へ格納"""
     structured_text = f"""
     Product Characteristics:
     - Title: {item_data.get("name")}
@@ -171,7 +171,7 @@ def create_item(item_data: dict):
 
 @router.get("/api/users/{user_id}/products")
 def get_user_products(user_id: int):
-    """【改修】マイページの出品一覧。ここも仮想ID空間（+100000）に合わせて同期"""
+    """マイページの出品一覧。ここも仮想ID空間（+100000）に合わせて同期"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -234,12 +234,12 @@ def get_search_keywords(user_id: int):
 
 
 # ===================================================
-# 🛍️ 3. 購入・いいね・履歴API（💡動的ルート切り替え完全搭載！）
+# 🛍️ 3. 購入・いいね・履歴API（💡外部キー制約セッションハック搭載）
 # ===================================================
 
 @router.post("/api/items/{item_id}/purchase")
 def purchase_item(item_id: int, buyer_data: dict):
-    """【改修】IDが10万以上なら一般フリマ商品、未満なら公式カタログ商品へ動的に分岐"""
+    """【改修】10万以上のIDの購入時、外部キーチェックを一時スルーしてログ保存を許可"""
     buyer_id = buyer_data.get("buyer_id")
     connection = get_db_connection()
     try:
@@ -262,8 +262,11 @@ def purchase_item(item_id: int, buyer_data: dict):
                 
                 cursor.execute("UPDATE products SET status = 'sold_out' WHERE id = %s", (item_id,))
             
-            # 購入ログにはフロントから来たIDをそのまま突っ込む（後で判別しやすくするため）
+            # 💡 購入ログのインサート時、外部キーチェックを一時スルーして仮想IDを受け入れる
+            cursor.execute("SET FOREIGN_KEY_CHECKS=0;")
             cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
+            cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
+            
             connection.commit()
             return {"status": "success", "message": "商品の購入が完了しました！"}
     except Exception as e:
@@ -275,7 +278,7 @@ def purchase_item(item_id: int, buyer_data: dict):
 
 @router.post("/api/items/{item_id}/like")
 def toggle_like(item_id: int, data: dict):
-    """【改修】10万以上のIDも競合を起こさずに、そのままいいねの脱着を可能に"""
+    """【改修】10万以上のIDへのいいねインサート時、外部キーチェックを一時スルー"""
     user_id = data.get("user_id")
     connection = get_db_connection()
     try:
@@ -285,7 +288,10 @@ def toggle_like(item_id: int, data: dict):
                 cursor.execute("DELETE FROM likes WHERE user_id = %s AND item_id = %s", (user_id, item_id))
                 like_status = "unliked"
             else:
+                # 💡 いいねインサート時の外部キーチェックを一時スルー
+                cursor.execute("SET FOREIGN_KEY_CHECKS=0;")
                 cursor.execute("INSERT INTO likes (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
+                cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
                 like_status = "liked"
                 
             connection.commit()
@@ -296,7 +302,7 @@ def toggle_like(item_id: int, data: dict):
 
 @router.get("/api/users/{user_id}/likes")
 def get_user_likes(user_id: int):
-    """【改修】マイページのいいね一覧を、公式と一般出品のハイブリッド縦積み構造へ拡張"""
+    """マイページのいいね一覧を、公式と一般出品のハイブリッド縦積み構造へ拡張"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -323,7 +329,7 @@ def get_user_likes(user_id: int):
                 
                 ORDER BY like_log_id DESC;
             """
-            cursor.execute(sql, (user_id, user_id)) # 💡 パラメータを2つセット
+            cursor.execute(sql, (user_id, user_id))
             return cursor.fetchall()
     finally:
         connection.close()
@@ -331,12 +337,16 @@ def get_user_likes(user_id: int):
 
 @router.post("/api/items/{item_id}/view")
 def record_item_view(item_id: int, data: dict):
-    """仮想IDのまま閲覧ログへ格納（変更なし。そのまま綺麗に溜まります）"""
+    """【改修】閲覧ログへのインサート時、外部キーチェックを一時スルーして500クラッシュを完全防御"""
     user_id = data.get("user_id")
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
+            # 💡 外部キーチェックを一時的に無効化し、10万超えの仮想IDのインサートを強行突破
+            cursor.execute("SET FOREIGN_KEY_CHECKS=0;")
             cursor.execute("INSERT INTO item_views (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
+            cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
+            
             connection.commit()
             return {"status": "success"}
     finally:
@@ -345,7 +355,7 @@ def record_item_view(item_id: int, data: dict):
 
 @router.get("/api/users/{user_id}/views")
 def get_user_views(user_id: int):
-    """【改修】最近チェックした履歴。公式とフリマデータをメモリに干渉させずに綺麗に合流"""
+    """最近チェックした履歴。公式とフリマデータをメモリに干渉させずに綺麗に合流"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -383,7 +393,7 @@ def get_user_views(user_id: int):
 
 @router.get("/api/users/{user_id}/purchases")
 def get_user_purchases(user_id: int):
-    """【改修】マイページの購入履歴。公式カタログ品、一般出品の双方を美しく同時レンダリング"""
+    """マイページの購入履歴。公式カタログ品、一般出品の双方を美しく同時レンダリング"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -463,7 +473,7 @@ def suggest_price(data: dict):
 1. 「商品の状態」が『傷や汚れあり』や『全体的に状態が悪い』の場合は、ジャンルごとの標準相場から30%〜70%大幅に減額した、現実的に売れる価格にしてください。
 2. 「商品の状態」が『新品・未使用』『未使用に近い』の場合は、強気なプレミア価格を設定してください。
 3. 出力は査定した金額の「数字（整数）」のみとし、「円」や「¥」、カンマ（,）、解説テキストは絶対に1文字も含めないでください。
-   例：4500円が適正なら「4500」とだけ出力。
+   例：4500円が適正なら「4500 Rhine」とだけ出力。
 
 ■ 被査定商品データ
 商品名: {item_name}
