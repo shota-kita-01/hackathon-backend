@@ -12,10 +12,9 @@ class RecommendationEngine:
     def __init__(self):
         print("🧠 レコメンドエンジンを初期化中...")
         
-        # 💡 パスを確実にルートの data/ フォルダへ誘導
+        # パスを確実にルートの data/ フォルダへ誘導
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
         
-        # 🔥 【修正】昨日15並列で爆速生成した、2200件の最終マスターファイルを指定！
         embeddings_json_path = os.path.join(BASE_DIR, "data", "items_with_embeddings_all_2200.json")
         fallback_json_path = os.path.join(BASE_DIR, "data", "items_for_db.json")
         
@@ -40,8 +39,29 @@ class RecommendationEngine:
         with open(matrix_path, "r", encoding="utf-8") as f:
             self.markov_matrix = json.load(f)
             
-        # 💡 ログの表記を22x22のリアルな数理モデルに修正
         print(f"   ➔ ロード完了: 商品数 {len(self.items)} 件 / マルコフ行列 22x22")
+
+    def _transform_item(self, item, score=None):
+        """
+        💡 【新設】JSONの公式カタログデータを、フロントエンドの統一フリマスキーマへ
+        安全かつ美しくマッピングする数理変換ヘルパー
+        """
+        data = {
+            "id": item["id"], 
+            "asin": item.get("asin"), 
+            "name": item.get("name"),
+            "price": item.get("price"), 
+            "tags": item.get("ai_category"),
+            "description": item.get("description"), 
+            "image_url": item.get("image_url"),
+            "status": item["status"], 
+            "item_condition": "新品・未使用", # 💡 公式カタログ品に一律「新品」のメタデータを付与
+            "seller_name": "公式出品",         # 💡 表記揺れ（Amazon公式など）を防ぐために「公式出品」に統一
+            "shipping_days": "1〜2日で発送"
+        }
+        if score is not None:
+            data["score"] = score
+        return data
 
     # ===================================================
     # 🧠 「Ask AI ✨」用の自由テキスト検索
@@ -82,13 +102,8 @@ class RecommendationEngine:
                 
                 final_score = min(float(base_score), 0.99)
                 
-                product_data = {
-                    "id": item["id"], "asin": item.get("asin"), "name": item.get("name"),
-                    "price": item.get("price"), "tags": item.get("ai_category"),
-                    "description": item.get("description"), "image_url": item.get("image_url"),
-                    "status": item["status"], "seller_name": "Amazon公式",
-                    "shipping_days": "1〜2日で発送", "score": final_score
-                }
+                # 💡 変換ヘルパーを介してパッキング
+                product_data = self._transform_item(item, score=final_score)
                 scored_items.append(product_data)
             
             scored_items.sort(key=lambda x: x["score"], reverse=True)
@@ -100,25 +115,16 @@ class RecommendationEngine:
             v_key = "embedding" if "embedding" in item else ("embeddings" if "embeddings" in item else "vector")
             sim = cos_sim(query_vector, item[v_key])
             
-            product_data = {
-                "id": item["id"], 
-                "asin": item.get("asin"), 
-                # 💡 フロントエンドの変数名と完全同期させ、確実に日本語版（name）を渡します
-                "name": item.get("name"),
-                "price": item.get("price"), 
-                "tags": item.get("ai_category"),
-                "description": item.get("description"), 
-                "image_url": item.get("image_url"),
-                "status": item["status"], 
-                "seller_name": "Amazon公式",
-                "shipping_days": "1〜2日で発送", 
-                "score": sim
-            }
+            # 💡 変換ヘルパーを介してパッキング
+            product_data = self._transform_item(item, score=sim)
             scored_items.append(product_data)
             
         scored_items.sort(key=lambda x: x["score"], reverse=True)
         return scored_items[:top_n]
 
+    # ===================================================
+    # 🛰️ 詳細画面用：確率的時間遷移 ＆ 空間的類似
+    # ===================================================
     def get_recommendations(self, target_asin, top_n=3):
         target_item = next((item for item in self.items if item["asin"] == target_asin), None)
         if not target_item: return None, None
@@ -135,7 +141,8 @@ class RecommendationEngine:
                 space_candidates.append((sim, item))
                 
         space_candidates.sort(key=lambda x: x[0], reverse=True)
-        carousel_1 = [item for _, item in space_candidates[:top_n]]
+        # 💡 1段目のカルーセル候補にスキーマを完全注入！
+        carousel_1 = [self._transform_item(item) for _, item in space_candidates[:top_n]]
 
         transitions = self.markov_matrix[current_cat]
         sorted_next_cats = sorted([(prob, cat) for cat, prob in transitions.items() if cat != current_cat], reverse=True)
@@ -149,6 +156,7 @@ class RecommendationEngine:
                 time_candidates.append((sim, item))
                 
         time_candidates.sort(key=lambda x: x[0], reverse=True)
-        carousel_2 = [item for _, item in time_candidates[:top_n]]
+        # 💡 2段目のカルーセル候補にもスキーマを完全注入！
+        carousel_2 = [self._transform_item(item) for _, item in time_candidates[:top_n]]
         
         return carousel_1, carousel_2
