@@ -349,7 +349,16 @@ def suggest_description(data: dict):
     if not item_name: 
         raise HTTPException(status_code=400, detail="商品名が必要です")
     try:
-        prompt = f"商品名: {item_name} から魅力的な日本語の説明文を作成してください。"
+        prompt = f"""あなたは日本の大人気フリマアプリ（メルカリなど）で月商100万円を売り上げる伝説のトップセラーです。
+ユーザーが入力した商品名をもとに、購入者の物欲を極限まで刺激する「そのままコピペして使える完成された商品説明文」を1つだけ作成してください。
+
+【⚠️絶対に守るべき鉄の掟】
+1. 「〇〇の説明文ですね！」などの前置き、挨拶、終わりの会話文は、1文字たりとも出力しないでください。
+2. 「パターン1」「パターン2」などの複数提案や、キャッチコピーの箇条書きは絶対に禁止です。最初から最高の一着としての文章を1パターンだけ作成してください。
+3. 出力するテキストは、フリマの「商品説明欄にそのまま貼り付けられる本文」のみとしてください。
+4. 文字数は200字程度とし、無駄に長く、冗長になることは避けてください。
+
+商品名: {item_name}"""
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
@@ -360,20 +369,52 @@ def suggest_description(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ===================================================
+# 💰 改修版：AI価格査定API
+# ===================================================
 @router.post("/api/ai/suggest-price")
 def suggest_price(data: dict):
+    # 💡 4つの必須パラメーターをすべてハントする
     item_name = data.get("name")
     item_description = data.get("description")
-    if not item_name or not item_description: 
-        raise HTTPException(status_code=400, detail="不足しています")
+    item_category = data.get("tags")            # 選択された22ジャンルの英名
+    item_condition = data.get("item_condition")  # 「新品」「傷あり」などの状態
+
+    # 🛑 【条件分岐】どれか1つでも空、または存在しない場合は即座に親切な指示を返してブロック！
+    if not item_name or not item_description or not item_category or not item_condition:
+        raise HTTPException(
+            status_code=400, 
+            detail="【AI査定エラー】商品名、商品説明、出品ジャンル、商品の状態をすべて入力・選択してから、もう一度AI価格査定を押してください！"
+        )
+        
     try:
-        prompt = f"日本のフリマ市場の適正価格を数字のみで出力してください。商品名: {item_name}\n商品説明: {item_description}"
+        # 🧠 カテゴリと状態の重みを加味させる最強のプロンプト
+        prompt = f"""あなたは日本のフリマ市場（メルカリやヤフオクなど）の相場・価格決定メカニズムを完璧にハックしている超一流のAI査定士です。
+以下の4つの情報をもとに、現在の日本のリアルなセカンドハンド市場で「最も買い手がつきやすく、かつ損をしない適正な販売価格（日本円）」を査定してください。
+
+【⚠️ 査定における数理的重み付けのルール】
+1. 「商品の状態」が『傷や汚れあり』や『全体的に状態が悪い』の場合は、ジャンルごとの標準相場から30%〜70%大幅に減額した、現実的に売れる価格にしてください。
+2. 「商品の状態」が『新品・未使用』『未使用に近い』の場合は、強気なプレミア価格を設定してください。
+3. 出力は査定した金額の「数字（整数）」のみとし、「円」や「¥」、カンマ（,）、解説テキストは絶対に1文字も含めないでください。
+   例：4500円が適正なら「4500」とだけ出力。
+
+■ 被査定商品データ
+商品名: {item_name}
+商品説明: {item_description}
+カテゴリ: {item_category}
+商品の状態: {item_condition}"""
+
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.3)
+            config=types.GenerateContentConfig(temperature=0.3) # 査定のブレをなくすため低めの温度に設定
         )
+        
         jpy_price = int(response.text.strip())
         return {"status": "success", "suggested_price": jpy_price}
+        
+    except ValueError:
+        # 万が一AIが数字以外を返してきた場合のセーフティネット
+        raise HTTPException(status_code=500, detail="AIが有効な数値を生成できませんでした。もう一度お試しください。")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
