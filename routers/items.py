@@ -80,32 +80,34 @@ def get_items():
     try:
         with connection.cursor() as cursor:
             sql = """
-                -- ① 初期配置のカタログデータ
+                -- ① 初期配置のカタログデータ（💡 asin をしっかり取得！）
                 SELECT 
                     id AS id, 
+                    asin AS asin, 
                     name AS name, 
                     price AS price, 
                     ai_category AS tags, 
                     description AS description, 
                     image_url AS image_url, 
                     status AS status, 
-                    '新品・未使用' AS item_condition, -- 💡 カタログ側は一律新品扱い
+                    '新品・未使用' AS item_condition, 
                     '公式出品' AS seller_name, 
                     '1〜2日で発送' AS shipping_days 
                 FROM products
                 
                 UNION ALL
                 
-                -- ② ユーザーが実際にアプリから出品したカスタムデータ
+                -- ② ユーザーが出品したカスタムデータ（💡 列数を合わせるために NULL でプレースホルダーを設置）
                 SELECT 
                     id AS id, 
+                    NULL AS asin, 
                     name AS name, 
                     price AS price, 
                     tags AS tags, 
                     description AS description, 
                     image_url AS image_url, 
                     status AS status,
-                    item_condition AS item_condition, -- 💡 ユーザー出品のリアルな状態を取得
+                    item_condition AS item_condition, 
                     seller_nickname AS seller_name, 
                     shipping_days AS shipping_days
                 FROM items
