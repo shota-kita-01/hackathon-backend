@@ -39,6 +39,33 @@ class RecommendationEngine:
             
         print(f"   ➔ ロード完了: 公式商品数 {len(self.static_products)} 件 / マルコフ行列 22x22")
 
+    def _get_all_items(self):
+        """【新設】公式データの最新ステータスをDBから同期し、ユーザー出品データと結合して全アイテムプールを返す"""
+        from db import get_db_connection
+        
+        # 1. データベース（MySQL）から公式商品の最新ステータス（on_sale / sold_out）を一括ハント
+        connection = get_db_connection()
+        product_status_map = {}
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT id, status FROM products;")
+                rows = cursor.fetchall()
+                for row in rows:
+                    product_status_map[row["id"]] = row["status"]
+        except Exception as e:
+            print(f"⚠️ 公式商品のリアルタイムステータス同期に失敗しました: {e}")
+        finally:
+            connection.close()
+
+        # 2. メモリ上にある静的JSONデータのステータスを、DBの最新値で動的に上書き書き換え
+        for item in self.static_products:
+            pid = item.get("id")
+            if pid in product_status_map:
+                item["status"] = product_status_map[pid]
+
+        # 3. 最新化した公式データと、リアルタイムなユーザー出品データをガッチャンコして返却
+        return self.static_products + self._load_user_items()
+
     def _load_user_items(self):
         """MySQLからユーザー出品をロードする瞬間も、IDを一律 100000 加算。"""
         from db import get_db_connection
@@ -101,7 +128,8 @@ class RecommendationEngine:
     # ===================================================
     def get_products_by_mood(self, mood_text, top_n=500):
         from db import client 
-        all_items = self.static_products + self._load_user_items()
+        # 💡 リアルタイム動的同期メソッド経由に修正
+        all_items = self._get_all_items()
         
         query_vector = None
         try:
@@ -153,15 +181,14 @@ class RecommendationEngine:
         return scored_items[:top_n]
 
     # ===================================================
-    # 🛰️ 詳細画面用：確率的時間遷移 ＆ 空間的類似（💡超堅牢リファクタリング版）
+    # 🛰️ 詳細画面用：確率的時間遷移 ＆ 空間的類似
     # ===================================================
     def get_recommendations(self, target_asin, top_n=3):
-        all_items = self.static_products + self._load_user_items()
+        # 💡 リアルタイム動的同期メソッド経由に修正
+        all_items = self._get_all_items()
 
-        # 💡 【解決】判定の誤爆を避けるため、まずはストレートにASIN一致（公式）から探す
         target_item = next((item for item in all_items if item.get("asin") == str(target_asin)), None)
         
-        # 公式ASINで見つからなかった場合のみ、10万台の仮想ID（一般出品）としてハントする
         if not target_item:
             try:
                 target_id = int(target_asin)
@@ -197,7 +224,6 @@ class RecommendationEngine:
         space_candidates.sort(key=lambda x: x[0], reverse=True)
         carousel_1 = [self._transform_item(item) for _, item in space_candidates[:top_n]]
 
-        # マルコフ連鎖による時間遷移予測
         transitions = self.markov_matrix.get(current_cat)
         if not transitions:
             return carousel_1, []
