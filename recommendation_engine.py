@@ -41,15 +41,19 @@ class RecommendationEngine:
         print(f"   ➔ ロード完了: 公式商品数 {len(self.static_products)} 件 / マルコフ行列 22x22")
 
     def _load_user_items(self):
-        """MySQLから、ユーザーが投稿した最新の一般出品データをベクトル付きで動的にハント"""
+        """
+        💡 【修正】MySQLからユーザー出品をロードする瞬間も、IDを一律 100000 加算。
+        これにより、メモリ内の全プール（all_items）の座標を10万番台に完全同期させます。
+        """
         from db import get_db_connection
         connection = get_db_connection()
         user_items = []
         try:
             with connection.cursor() as cursor:
+                # 💡 id + 100000 AS id に修正して、マッピングのズレを解消
                 sql = """
                     SELECT 
-                        id, 
+                        id + 100000 AS id, 
                         NULL AS asin,
                         name, 
                         price, 
@@ -68,7 +72,7 @@ class RecommendationEngine:
                 for row in rows:
                     if row.get("embedding"):
                         try:
-                            # DBに格納されているJSON文字列のベクトルを、Pythonの数値リスト配列にデシリアライズ
+                            # DBに格納されているJSON文字列のベクトルを数値リスト配列に復元
                             row["embedding"] = json.loads(row["embedding"])
                             user_items.append(row)
                         except Exception as e:
@@ -80,10 +84,7 @@ class RecommendationEngine:
         return user_items
 
     def _transform_item(self, item, score=None):
-        """
-        公式データ（JSON）と一般ユーザーデータ（DB）の構造の差異を吸収し、
-        フロントエンドが求める統一フリマスキーマへ安全に整列
-        """
+        """公式データ（JSON）と一般ユーザーデータ（DB）の構造の差異を吸収し、フロントエンドに統一整形"""
         data = {
             "id": item["id"], 
             "asin": item.get("asin"), 
@@ -168,7 +169,7 @@ class RecommendationEngine:
         # 🚀 推薦エンジンの探索分母に最新のハイブリッドプールを適用
         all_items = self.static_products + self._load_user_items()
 
-        # 💡 【数理ハック】target_asinが10万以上の数値（一般フリマID）か公式ASINかをインテリジェントに切り替え
+        # target_asinが10万以上の数値（一般フリマID）か公式ASINかを自動判別
         target_item = None
         target_asin_str = str(target_asin)
         
@@ -191,7 +192,7 @@ class RecommendationEngine:
             item_cat = item.get("ai_category") or item.get("tags")
             v = item.get("embedding") or item.get("embeddings") or item.get("vector")
             
-            # 公式同士のASIN一致、または一般フリマ同士のID一致で自分自身を除外
+            # 💡 ID空間が同期したため、ここで自分自身（自商品）を綺麗にフィルタリング可能に
             is_self = (item.get("asin") and target_item.get("asin") and item["asin"] == target_item["asin"]) or \
                       (not item.get("asin") and not target_item.get("asin") and item["id"] == target_item["id"])
             
