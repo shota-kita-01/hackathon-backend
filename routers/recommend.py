@@ -22,7 +22,7 @@ def get_mood_recommendations(data: RecommendRequest, request: Request):
             
         engine = request.app.state.recommend_engine
         
-        # AIに少し多め（500件）に類似商品を計算してもらう（エンジン側で自動で一般出品もマージされます！）
+        # AIに類似商品を計算してもらう（エンジン側で自動で一般出品もマージされます！）
         recommended_products = engine.get_products_by_mood(data.mood_text, top_n=500)
         
         # フロントからの絞り込み（filter_status）を適用
@@ -39,26 +39,20 @@ def get_mood_recommendations(data: RecommendRequest, request: Request):
 
 
 # ===================================================
-# 🛰️ 2. 詳細画面用：確率的時間遷移 ＆ 空間的類似（💡超防弾・型安全化！）
+# 🛰️ 2. 詳細画面用：確率的時間遷移 ＆ 空間的類似
 # ===================================================
 @router.get("/api/recommendations/{asin}")
 def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
-    """詳細画面のカルーセル用データ（公式ASIN・一般出品ID・nullの分裂を完全吸収）"""
+    """詳細画面のカルーセル用データ（公式ASIN・一般出品IDの双方を安全にエンジンへ中継）"""
     try:
         if not hasattr(request.app.state, "recommend_engine") or request.app.state.recommend_engine is None:
             raise HTTPException(status_code=500, detail="レコメンドエンジンが初期化されていません")
             
         engine = request.app.state.recommend_engine
         
-        # 💡 【防弾ハック】一般出品でASINがなく、フロントから "null" や "undefined" として届いた場合の救済処置
-        if asin in ["null", "undefined", "None", ""]:
-            # デモを壊さないため、適当な公式の人気ASIN（例：Booksの先頭など）を身代わりにして推薦を回す
-            asin = "0062279068" 
-
-        # コサイン類似度とマルコフ連鎖を計算
+        # フロント（ItemDetailModal.js）から届いた識別子をそのままエンジンへ中継
         carousel_1, carousel_2 = engine.get_recommendations(asin, top_n=top_n)
         
-        # 💡 もし一般出品のID（数値）が直接飛んできて引き当てられなかった場合のエラー回避ガード
         if carousel_1 is None or carousel_2 is None:
             return {
                 "target_asin": asin,
@@ -88,7 +82,7 @@ def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
 
 
 # ===================================================
-# 🏠 3. ホーム画面用：3段パーソナライズ統合エンドポイント（💡真のハイブリッド化）
+# 🏠 3. ホーム画面用：3段パーソナライズ統合エンドポイント
 # ===================================================
 @router.get("/api/home/{user_id}")
 def get_home_dashboard(user_id: int):
@@ -121,14 +115,15 @@ def get_home_dashboard(user_id: int):
             market_cat_row = cursor.fetchone()
             market_top_cat = market_cat_row['ai_category'] if market_cat_row else "Electronics"
 
-            # 🛠️ 【数理改修】指定カテゴリーから、公式と一般出品を混ぜたハイブリッドプールからランダムに取得するサブクエリ
+            # 🛠️ 指定カテゴリーから、公式と一般出品を混ぜたハイブリッドプールからランダムに取得するサブクエリ
             def get_items_by_cat(category, limit=5):
+                # 💡 一般出品のIDに一律 100000 を足すように修正！
                 sql = """
                     SELECT id, asin, name, price, tags, description, image_url, status, item_condition, seller_name, shipping_days
                     FROM (
                         SELECT id, asin, name, price, ai_category AS tags, description, image_url, status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, '1〜2日で発送' AS shipping_days FROM products
                         UNION ALL
-                        SELECT id, NULL AS asin, name, price, tags, description, image_url, status, item_condition, seller_nickname AS seller_name, shipping_days FROM items
+                        SELECT id + 100000 AS id, NULL AS asin, name, price, tags, description, image_url, status, item_condition, seller_nickname AS seller_name, shipping_days FROM items
                     ) as hybrid_pool
                     WHERE tags = %s AND status = 'on_sale'
                     ORDER BY RAND() LIMIT %s
@@ -140,12 +135,13 @@ def get_home_dashboard(user_id: int):
             if user_cats:
                 top_3_cats = [c['ai_category'] for c in user_cats[:3]]
                 format_strings = ','.join(['%s'] * len(top_3_cats))
+                # 💡 ここも一般出品のIDに 100000 を加算！
                 sql = f"""
                     SELECT id, asin, name, price, tags, description, image_url, status, item_condition, seller_name, shipping_days
                     FROM (
                         SELECT id, asin, name, price, ai_category AS tags, description, image_url, status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, '1〜2日で発送' AS shipping_days FROM products
                         UNION ALL
-                        SELECT id, NULL AS asin, name, price, tags, description, image_url, status, item_condition, seller_nickname AS seller_name, shipping_days FROM items
+                        SELECT id + 100000 AS id, NULL AS asin, name, price, tags, description, image_url, status, item_condition, seller_nickname AS seller_name, shipping_days FROM items
                     ) as hybrid_pool
                     WHERE tags IN ({format_strings}) AND status = 'on_sale'
                     ORDER BY RAND() LIMIT 5
@@ -153,12 +149,13 @@ def get_home_dashboard(user_id: int):
                 cursor.execute(sql, tuple(top_3_cats))
                 personalized_top5 = cursor.fetchall()
             else:
+                # 💡 ここも一般出品のIDに 100000 を加算！
                 sql = """
                     SELECT id, asin, name, price, tags, description, image_url, status, item_condition, seller_name, shipping_days
                     FROM (
                         SELECT id, asin, name, price, ai_category AS tags, description, image_url, status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, '1〜2日で発送' AS shipping_days FROM products
                         UNION ALL
-                        SELECT id, NULL AS asin, name, price, tags, description, image_url, status, item_condition, seller_nickname AS seller_name, shipping_days FROM items
+                        SELECT id + 100000 AS id, NULL AS asin, name, price, tags, description, image_url, status, item_condition, seller_nickname AS seller_name, shipping_days FROM items
                     ) as hybrid_pool
                     WHERE status = 'on_sale' ORDER BY RAND() LIMIT 5
                 """

@@ -16,7 +16,7 @@ class RecommendationEngine:
         embeddings_json_path = os.path.join(BASE_DIR, "data", "items_with_embeddings_all_2200.json")
         fallback_json_path = os.path.join(BASE_DIR, "data", "items_for_db.json")
         
-        # 💡 【改修】ユーザーのリアルタイム出品と動的に混ぜるため、公式データは「static_products」として独立保持
+        # ユーザーのリアルタイム出品と動的に混ぜるため、公式データは「static_products」として独立保持
         try:
             with open(embeddings_json_path, "r", encoding="utf-8") as f:
                 self.static_products = json.load(f)
@@ -41,7 +41,7 @@ class RecommendationEngine:
         print(f"   ➔ ロード完了: 公式商品数 {len(self.static_products)} 件 / マルコフ行列 22x22")
 
     def _load_user_items(self):
-        """💡 【新設】MySQLから、ユーザーが投稿した最新の一般出品データをベクトル付きで動的にハント"""
+        """MySQLから、ユーザーが投稿した最新の一般出品データをベクトル付きで動的にハント"""
         from db import get_db_connection
         connection = get_db_connection()
         user_items = []
@@ -81,10 +81,9 @@ class RecommendationEngine:
 
     def _transform_item(self, item, score=None):
         """
-        💡 【改修】公式データ（JSON）と一般ユーザーデータ（DB）の構造の差異を吸収し、
+        公式データ（JSON）と一般ユーザーデータ（DB）の構造の差異を吸収し、
         フロントエンドが求める統一フリマスキーマへ安全に整列
         """
-        # アイテムが元から持っているメタ（フリマの状態や出品者名、カテゴリタグ）を最優先し、無ければ公式デフォルトを当てる防弾仕様
         data = {
             "id": item["id"], 
             "asin": item.get("asin"), 
@@ -108,7 +107,6 @@ class RecommendationEngine:
     def get_products_by_mood(self, mood_text, top_n=500):
         from db import client 
         
-        # 🚀 公式カタログと、ユーザーの一般出品をこの瞬間にガッチャンコして計算の母集団（全宇宙）を生成！
         all_items = self.static_products + self._load_user_items()
         
         query_vector = None
@@ -152,7 +150,6 @@ class RecommendationEngine:
             scored_items.sort(key=lambda x: x["score"], reverse=True)
             return scored_items[:top_n]
         
-        # ─── 🤖 通常ルート：コサイン類似度計算 ───
         scored_items = []
         for item in all_items:
             v_key = "embedding" if "embedding" in item else ("embeddings" if "embeddings" in item else "vector")
@@ -168,11 +165,22 @@ class RecommendationEngine:
     # 🛰️ 詳細画面用：確率的時間遷移 ＆ 空間的類似（ハイブリッド空間結合版）
     # ===================================================
     def get_recommendations(self, target_asin, top_n=3):
-        # 🚀 推薦エンジンの探索分母にも最新のハイブリッドプールを適用！
+        # 🚀 推薦エンジンの探索分母に最新のハイブリッドプールを適用
         all_items = self.static_products + self._load_user_items()
 
-        target_item = next((item for item in all_items if item.get("asin") == target_asin), None)
-        if not target_item: return None, None
+        # 💡 【数理ハック】target_asinが10万以上の数値（一般フリマID）か公式ASINかをインテリジェントに切り替え
+        target_item = None
+        target_asin_str = str(target_asin)
+        
+        if target_asin_str.isdigit() and int(target_asin_str) >= 100000:
+            target_id = int(target_asin_str)
+            target_item = next((item for item in all_items if item.get("id") == target_id and not item.get("asin")), None)
+        else:
+            target_item = next((item for item in all_items if item.get("asin") == target_asin), None)
+
+        if not target_item: 
+            print(f"⚠️ ターゲット商品が見つかりません (引数: {target_asin})")
+            return None, None
             
         current_cat = target_item.get("ai_category") or target_item.get("tags")
         target_vector = target_item.get("embedding") or target_item.get("embeddings") or target_item.get("vector")
@@ -183,8 +191,9 @@ class RecommendationEngine:
             item_cat = item.get("ai_category") or item.get("tags")
             v = item.get("embedding") or item.get("embeddings") or item.get("vector")
             
-            # ASIN一致（公式）か、ID一致（一般ユーザー）で自分自身を除外しながら走査
-            is_self = (item.get("asin") and item.get("asin") == target_asin) or (item["id"] == target_item["id"] and not item.get("asin"))
+            # 公式同士のASIN一致、または一般フリマ同士のID一致で自分自身を除外
+            is_self = (item.get("asin") and target_item.get("asin") and item["asin"] == target_item["asin"]) or \
+                      (not item.get("asin") and not target_item.get("asin") and item["id"] == target_item["id"])
             
             if not is_self and item_cat == current_cat and v:
                 sim = cos_sim(target_vector, v)
@@ -199,6 +208,9 @@ class RecommendationEngine:
             return carousel_1, []
             
         sorted_next_cats = sorted([(prob, cat) for cat, prob in transitions.items() if cat != current_cat], reverse=True)
+        if not sorted_next_cats:
+            return carousel_1, []
+            
         best_prob, next_cat = sorted_next_cats[0]
         
         time_candidates = []
