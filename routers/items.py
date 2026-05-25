@@ -123,7 +123,7 @@ def get_items():
 
 @router.post("/api/items/check")
 def check_item_safety(item_data: dict):
-    """【新設】出品前にGeminiで商品が規約違反でないかリアルタイム審査するエンドポイント"""
+    """🛡️ 出品前にGeminiで商品が規約違反でないかリアルタイム審査するエンドポイント（バグ回避・防弾パース版）"""
     try:
         moderation_prompt = f"""あなたは日本の大手フリマアプリの厳格なコンプライアンス審査官です。
 以下の出品申請された商品の「商品名」と「商品説明」を厳密に精査し、フリマの一般的な出品禁止物（武器、違法薬物、処方箋医薬品、偽ブランド品・スーパーコピー、詐欺・情報商材、成人向けコンテンツなど）に該当、あるいは規約違反の恐れがないか数理的に判定してください。
@@ -131,22 +131,38 @@ def check_item_safety(item_data: dict):
 商品名: {item_data.get("name")}
 商品説明: {item_data.get("description")}
 
-必ず以下のJSONフォーマットのみで返答してください。解説テキストは1文字も含めてはなりません。
+出力は、必ず以下のキーを持つJSONフォーマットのみとしてください。
 {{
   "is_safe": true または false,
   "reason": "違反と判定した具体的な理由（日本語）。安全な場合は空文字にしてください。"
-}}"""
+}}
 
+【⚠️厳格な掟】
+プログラムで直接パースするため、前置きや解説テキストは1文字も含めてはなりません。
+必ず最初の「{{」から始めて、最後の「}}」で美しく閉じてください。"""
+
+        # 💡 configからエラーの原因だった response_mime_type を完全に撤去！
         mod_res = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=moderation_prompt,
             config=types.GenerateContentConfig(
-                temperature=0.0,               # 判定のブレを極限まで無くすため0固定
-                response_mime_type="application/json" # JSON出力を強制
+                temperature=0.0 # 判定のブレを極限まで無くすため0固定
             )
         )
         
-        mod_data = json.loads(mod_res.text.strip())
+        raw_text = mod_res.text.strip()
+        
+        # 💡【防弾パースハック】AIが万が一気を利かせて「```json ... ```」で囲ってしまっても、中身のJSONだけを綺麗に引き抜く数理フィルター
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_text = "\n".join(lines).strip()
+        
+        # 確定したクリーンな文字列をJSONとしてロード
+        mod_data = json.loads(raw_text)
         return {
             "status": "success",
             "is_safe": mod_data.get("is_safe", True),
