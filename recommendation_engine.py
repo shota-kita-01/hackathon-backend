@@ -40,10 +40,9 @@ class RecommendationEngine:
         print(f"   ➔ ロード完了: 公式商品数 {len(self.static_products)} 件 / マルコフ行列 22x22")
 
     def _get_all_items(self):
-        """【新設】公式データの最新ステータスをDBから同期し、ユーザー出品データと結合して全アイテムプールを返す"""
+        """公式データの最新ステータスをDBから同期し、ユーザー出品データと結合して全アイテムプールを返す"""
         from db import get_db_connection
         
-        # 1. データベース（MySQL）から公式商品の最新ステータス（on_sale / sold_out）を一括ハント
         connection = get_db_connection()
         product_status_map = {}
         try:
@@ -57,13 +56,11 @@ class RecommendationEngine:
         finally:
             connection.close()
 
-        # 2. メモリ上にある静的JSONデータのステータスを、DBの最新値で動的に上書き書き換え
         for item in self.static_products:
             pid = item.get("id")
             if pid in product_status_map:
                 item["status"] = product_status_map[pid]
 
-        # 3. 最新化した公式データと、リアルタイムなユーザー出品データをガッチャンコして返却
         return self.static_products + self._load_user_items()
 
     def _load_user_items(self):
@@ -128,7 +125,6 @@ class RecommendationEngine:
     # ===================================================
     def get_products_by_mood(self, mood_text, top_n=500):
         from db import client 
-        # 💡 リアルタイム動的同期メソッド経由に修正
         all_items = self._get_all_items()
         
         query_vector = None
@@ -184,7 +180,6 @@ class RecommendationEngine:
     # 🛰️ 詳細画面用：確率的時間遷移 ＆ 空間的類似
     # ===================================================
     def get_recommendations(self, target_asin, top_n=3):
-        # 💡 リアルタイム動的同期メソッド経由に修正
         all_items = self._get_all_items()
 
         target_item = next((item for item in all_items if item.get("asin") == str(target_asin)), None)
@@ -209,6 +204,7 @@ class RecommendationEngine:
             print(f"🚨 [データ破損を検知] 商品 '{target_item.get('name')}' のベクトルが虚空です。緊急疑似座標を注入します。")
             target_vector = np.random.uniform(-0.02, 0.02, 768).tolist()
 
+        # 🥇 1段目：同じカテゴリーの空間類似推薦
         space_candidates = []
         for item in all_items:
             item_cat = item.get("ai_category") or item.get("tags")
@@ -217,13 +213,16 @@ class RecommendationEngine:
             is_self = (item.get("asin") and target_item.get("asin") and item["asin"] == target_item["asin"]) or \
                       (not item.get("asin") and not target_item.get("asin") and item["id"] == target_item["id"])
             
-            if not is_self and item_cat == current_cat and v:
+            # 💡【修正1】アイテムのstatusを取得し、'on_sale' のものだけに制限！
+            item_status = item.get("status", "on_sale")
+            if not is_self and item_cat == current_cat and v and item_status == "on_sale":
                 sim = cos_sim(target_vector, v)
                 space_candidates.append((sim, item))
                 
         space_candidates.sort(key=lambda x: x[0], reverse=True)
         carousel_1 = [self._transform_item(item) for _, item in space_candidates[:top_n]]
 
+        # 🥈 2段目：マルコフ連鎖による時間遷移予測
         transitions = self.markov_matrix.get(current_cat)
         if not transitions:
             return carousel_1, []
@@ -238,7 +237,10 @@ class RecommendationEngine:
         for item in all_items:
             item_cat = item.get("ai_category") or item.get("tags")
             v = item.get("embedding") or item.get("embeddings") or item.get("vector")
-            if item_cat == next_cat and v:
+            
+            # 💡【修正2】時間遷移先おすすめアイテムも、'on_sale' のものだけに厳しく限定！
+            item_status = item.get("status", "on_sale")
+            if item_cat == next_cat and v and item_status == "on_sale":
                 sim = cos_sim(target_vector, v)
                 time_candidates.append((sim, item))
                 
