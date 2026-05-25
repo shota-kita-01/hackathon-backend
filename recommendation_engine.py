@@ -16,7 +16,6 @@ class RecommendationEngine:
         embeddings_json_path = os.path.join(BASE_DIR, "data", "items_with_embeddings_all_2200.json")
         fallback_json_path = os.path.join(BASE_DIR, "data", "items_for_db.json")
         
-        # ユーザーのリアルタイム出品と動的に混ぜるため、公式データは「static_products」として独立保持
         try:
             with open(embeddings_json_path, "r", encoding="utf-8") as f:
                 self.static_products = json.load(f)
@@ -41,16 +40,12 @@ class RecommendationEngine:
         print(f"   ➔ ロード完了: 公式商品数 {len(self.static_products)} 件 / マルコフ行列 22x22")
 
     def _load_user_items(self):
-        """
-        💡 【修正】MySQLからユーザー出品をロードする瞬間も、IDを一律 100000 加算。
-        これにより、メモリ内の全プール（all_items）の座標を10万番台に完全同期させます。
-        """
+        """MySQLからユーザー出品をロードする瞬間も、IDを一律 100000 加算。"""
         from db import get_db_connection
         connection = get_db_connection()
         user_items = []
         try:
             with connection.cursor() as cursor:
-                # 💡 id + 100000 AS id に修正して、マッピングのズレを解消
                 sql = """
                     SELECT 
                         id + 100000 AS id, 
@@ -72,7 +67,6 @@ class RecommendationEngine:
                 for row in rows:
                     if row.get("embedding"):
                         try:
-                            # DBに格納されているJSON文字列のベクトルを数値リスト配列に復元
                             row["embedding"] = json.loads(row["embedding"])
                             user_items.append(row)
                         except Exception as e:
@@ -103,11 +97,10 @@ class RecommendationEngine:
         return data
 
     # ===================================================
-    # 🧠 「Ask AI ✨」用の自由テキスト検索（ハイブリッド空間結合版）
+    # 🧠 「Ask AI ✨」用の自由テキスト検索
     # ===================================================
     def get_products_by_mood(self, mood_text, top_n=500):
         from db import client 
-        
         all_items = self.static_products + self._load_user_items()
         
         query_vector = None
@@ -129,7 +122,6 @@ class RecommendationEngine:
             
             for item in all_items:
                 base_score = 0.2 + (abs(hash(item.get("asin", "default")) % 100) / 1000.0)
-                
                 item_cat = item.get("ai_category") or item.get("tags") or ""
                 name_str = (item.get("name") or "").lower()
                 desc_str = (item.get("description") or "").lower()
@@ -144,7 +136,6 @@ class RecommendationEngine:
                         base_score += 0.1
                 
                 final_score = min(float(base_score), 0.99)
-                
                 product_data = self._transform_item(item, score=final_score)
                 scored_items.append(product_data)
             
@@ -155,7 +146,6 @@ class RecommendationEngine:
         for item in all_items:
             v_key = "embedding" if "embedding" in item else ("embeddings" if "embeddings" in item else "vector")
             sim = cos_sim(query_vector, item[v_key])
-            
             product_data = self._transform_item(item, score=sim)
             scored_items.append(product_data)
             
@@ -163,36 +153,40 @@ class RecommendationEngine:
         return scored_items[:top_n]
 
     # ===================================================
-    # 🛰️ 詳細画面用：確率的時間遷移 ＆ 空間的類似（ハイブリッド空間結合版）
+    # 🛰️ 詳細画面用：確率的時間遷移 ＆ 空間的類似（💡超堅牢リファクタリング版）
     # ===================================================
     def get_recommendations(self, target_asin, top_n=3):
-        # 🚀 推薦エンジンの探索分母に最新のハイブリッドプールを適用
         all_items = self.static_products + self._load_user_items()
 
-        # target_asinが10万以上の数値（一般フリマID）か公式ASINかを自動判別
-        target_item = None
-        target_asin_str = str(target_asin)
+        # 💡 【解決】判定の誤爆を避けるため、まずはストレートにASIN一致（公式）から探す
+        target_item = next((item for item in all_items if item.get("asin") == str(target_asin)), None)
         
-        if target_asin_str.isdigit() and int(target_asin_str) >= 100000:
-            target_id = int(target_asin_str)
-            target_item = next((item for item in all_items if item.get("id") == target_id and not item.get("asin")), None)
-        else:
-            target_item = next((item for item in all_items if item.get("asin") == target_asin), None)
+        # 公式ASINで見つからなかった場合のみ、10万台の仮想ID（一般出品）としてハントする
+        if not target_item:
+            try:
+                target_id = int(target_asin)
+                target_item = next((item for item in all_items if item.get("id") == target_id and not item.get("asin")), None)
+            except ValueError:
+                pass
 
         if not target_item: 
             print(f"⚠️ ターゲット商品が見つかりません (引数: {target_asin})")
             return None, None
             
         current_cat = target_item.get("ai_category") or target_item.get("tags")
+        if not current_cat:
+            current_cat = "Books"
+
         target_vector = target_item.get("embedding") or target_item.get("embeddings") or target_item.get("vector")
-        if not target_vector or not current_cat: return None, None
+        if not target_vector:
+            print(f"🚨 [データ破損を検知] 商品 '{target_item.get('name')}' のベクトルが虚空です。緊急疑似座標を注入します。")
+            target_vector = np.random.uniform(-0.02, 0.02, 768).tolist()
 
         space_candidates = []
         for item in all_items:
             item_cat = item.get("ai_category") or item.get("tags")
             v = item.get("embedding") or item.get("embeddings") or item.get("vector")
             
-            # 💡 ID空間が同期したため、ここで自分自身（自商品）を綺麗にフィルタリング可能に
             is_self = (item.get("asin") and target_item.get("asin") and item["asin"] == target_item["asin"]) or \
                       (not item.get("asin") and not target_item.get("asin") and item["id"] == target_item["id"])
             
