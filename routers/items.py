@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from google.genai import types
 from db import get_db_connection, client
 import json
+import math
 
 router = APIRouter()
 
@@ -125,7 +126,6 @@ def get_items():
 def check_item_safety(item_data: dict):
     """🛡️ 出品前にGeminiで商品が規約違反でないかリアルタイム審査するエンドポイント（過剰検知防止・防弾パース版）"""
     try:
-        # 💡 審査基準をマイルドにし、フリマ独自の熱量ある表現を許容するプロンプトへ最適化
         moderation_prompt = f"""あなたは日本の大手フリマアプリの、実用的でバランス感覚に優れたコンプライアンス審査官です。
 以下の出品申請された商品の「商品名」と「商品説明」を精査し、**明らかに規約違反である明確な出品禁止物**（本物の武器、違法薬物、処方箋医薬品、偽ブランド品・スーパーコピー、詐欺・情報商材、成人向けコンテンツなど）に該当する場合のみ、不合格（is_safe: false）としてください。
 
@@ -146,18 +146,16 @@ def check_item_safety(item_data: dict):
 プログラムで直接パースするため、前置きや解説テキストは1文字も含めてはなりません。
 必ず最初の「{{」から始めて、最後の「}}」で美しく閉じてください。"""
 
-        # 💡 configから400エラーの原因だった response_mime_type は排除したまま維持
         mod_res = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=moderation_prompt,
             config=types.GenerateContentConfig(
-                temperature=0.0 # 判定のブレを極限まで無くすため0固定
+                temperature=0.0
             )
         )
         
         raw_text = mod_res.text.strip()
         
-        # 💡【防弾パースハック】マークダウン装飾（```json ... ```）を綺麗に引き抜く数理フィルター
         if raw_text.startswith("```"):
             lines = raw_text.splitlines()
             if lines[0].startswith("```"):
@@ -166,7 +164,6 @@ def check_item_safety(item_data: dict):
                 lines = lines[:-1]
             raw_text = "\n".join(lines).strip()
         
-        # 確定したクリーンな文字列をJSONとしてロード
         mod_data = json.loads(raw_text)
         return {
             "status": "success",
@@ -180,9 +177,10 @@ def check_item_safety(item_data: dict):
             "message": f"AI審査中にエラーが発生しました: {str(e)}"
         }
 
+
 @router.post("/api/items")
 def create_item(item_data: dict):
-    """ユーザーが出品画面から入力した内容を、一般出品テーブル（items）へ格納"""
+    """ユーザーが出品画面から入力した内容を、一般出品テーブル（items）へ格納 ＆ 📡潜在空間逆マッチングアラート"""
     structured_text = f"""
     Product Characteristics:
     - Title: {item_data.get("name")}
@@ -222,6 +220,31 @@ def create_item(item_data: dict):
                 item_data.get("shipping_days", "1〜2日で発送"),
                 embedding_json
             ))
+
+            new_item_raw_id = cursor.lastrowid
+            new_item_hybrid_id = new_item_raw_id + 100000
+
+            # 📡【潜在空間逆マッチング】全ユーザーの入荷待ちベクトルと高速内積計算
+            cursor.execute("SELECT user_id, keywords, embedding FROM wishlists")
+            all_wishes = cursor.fetchall()
+
+            for wish in all_wishes:
+                try:
+                    wish_vector = json.loads(wish["embedding"])
+                    dot = sum(a * b for a, b in zip(embedding_vector, wish_vector))
+                    norm1 = math.sqrt(sum(a * a for a in embedding_vector))
+                    norm2 = math.sqrt(sum(b * b for b in wish_vector))
+                    sim = dot / (norm1 * norm2 + 1e-9)
+
+                    if sim >= 0.85:
+                        match_percent = round(sim * 100, 1)
+                        cursor.execute("""
+                            INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
+                        """, (wish["user_id"], "✨ 脳内イメージにマッチする商品が入荷しました！", 
+                              f"入荷待ち登録「{wish['keywords']}」に {match_percent}% 一致する「{item_data.get('name')}」が出品されました！", new_item_hybrid_id))
+                except Exception as wish_err:
+                    print(f"⚠️ マッチング演算スキップ: {wish_err}")
+
             connection.commit()
             return {"status": "success", "message": "商品が出品されました！"}
     finally:
@@ -293,41 +316,55 @@ def get_search_keywords(user_id: int):
 
 
 # ===================================================
-# 🛍️ 3. 購入・いいね・履歴API（💡外部キー制約セッションハック搭載）
+# 🛍️ 3. 購入・いいね・履歴API
 # ===================================================
 
 @router.post("/api/items/{item_id}/purchase")
 def purchase_item(item_id: int, buyer_data: dict):
-    """【改修】10万以上のIDの購入時、外部キーチェックを一時スルーしてログ保存を許可"""
+    """購入時に取引管理（transactions）レコード ＆ 出品者への通知を同時自動生成"""
     buyer_id = buyer_data.get("buyer_id")
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
+            # 💡 【バグフィックス】Pythonの大文字NONEおよびNULLエラーをNoneに完全修正
+            seller_id, product_id, db_item_id, item_name = None, None, None, ""
+
             if item_id >= 100000:
-                # ユーザー一般出品の売切処理
                 raw_id = item_id - 100000
-                cursor.execute("SELECT status FROM items WHERE id = %s", (raw_id,))
+                db_item_id = raw_id
+                cursor.execute("SELECT seller_id, status, name FROM items WHERE id = %s", (raw_id,))
                 item = cursor.fetchone()
                 if not item: raise HTTPException(status_code=404, detail="商品が見つかりません")
                 if item["status"] == "sold_out": raise HTTPException(status_code=400, detail="売り切れています")
-                
+                seller_id, item_name = item["seller_id"], item["name"]
                 cursor.execute("UPDATE items SET status = 'sold_out' WHERE id = %s", (raw_id,))
             else:
-                # 公式カタログ商品の売切処理
-                cursor.execute("SELECT status FROM products WHERE id = %s", (item_id,))
+                product_id = item_id
+                cursor.execute("SELECT status, name FROM products WHERE id = %s", (item_id,))
                 product = cursor.fetchone()
                 if not product: raise HTTPException(status_code=404, detail="商品が見つかりません")
                 if product["status"] == "sold_out": raise HTTPException(status_code=400, detail="売り切れています")
-                
+                item_name = product["name"]
                 cursor.execute("UPDATE products SET status = 'sold_out' WHERE id = %s", (item_id,))
             
-            # 💡 購入ログのインサート時、外部キーチェックを一時スルーして仮想IDを受け入れる
+            # ① 既存の購入ログ（後方互換性維持）
             cursor.execute("SET FOREIGN_KEY_CHECKS=0;")
             cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
-            cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
             
+            # ② 🚀 取引進行管理（transactions）レコードの自動生成
+            tx_sql = "INSERT INTO transactions (item_id, product_id, buyer_id, seller_id, status) VALUES (%s, %s, %s, %s, 'shipping_pending')"
+            cursor.execute(tx_sql, (db_item_id, product_id, buyer_id, seller_id))
+            tx_id = cursor.lastrowid
+            
+            # ③ 🔔 出品者への通知インサート
+            if seller_id:
+                cursor.execute("""
+                    INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
+                """, (seller_id, "🎉 商品が購入されました！", f"出品した「{item_name}」が購入されました。発送手続きを進めてください。", item_id))
+            
+            cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
             connection.commit()
-            return {"status": "success", "message": "商品の購入が完了しました！"}
+            return {"status": "success", "message": "購入が完了しました！", "transaction_id": tx_id}
     except Exception as e:
         connection.rollback()
         raise e
@@ -401,7 +438,6 @@ def record_item_view(item_id: int, data: dict):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 💡 外部キーチェックを一時的に無効化し、10万超えの仮想IDのインサートを強行突破
             cursor.execute("SET FOREIGN_KEY_CHECKS=0;")
             cursor.execute("INSERT INTO item_views (user_id, item_id) VALUES (%s, %s)", (user_id, item_id))
             cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
@@ -425,8 +461,7 @@ def get_user_views(user_id: int):
                            p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
                            p.status AS status, '新品・未使用' AS item_condition, '公式出品' AS seller_name,
                            MAX(v.id) as max_v_id
-                    FROM item_views v
-                    JOIN products p ON v.item_id = p.id
+                    FROM item_views v JOIN products p ON v.item_id = p.id
                     WHERE v.user_id = %s AND v.item_id < 100000
                     GROUP BY p.id
 
@@ -436,8 +471,7 @@ def get_user_views(user_id: int):
                            i.tags AS tags, i.description AS description, i.image_url AS image_url, 
                            i.status AS status, i.item_condition AS item_condition, i.seller_nickname AS seller_name,
                            MAX(v.id) as max_v_id
-                    FROM item_views v
-                    JOIN items i ON (v.item_id - 100000) = i.id
+                    FROM item_views v JOIN items i ON (v.item_id - 100000) = i.id
                     WHERE v.user_id = %s AND v.item_id >= 100000
                     GROUP BY i.id
                 ) as hybrid_views
@@ -460,8 +494,7 @@ def get_user_purchases(user_id: int):
                 SELECT p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
                        p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
                        p.status AS status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, pur.id as pur_id
-                FROM purchases pur
-                JOIN products p ON pur.item_id = p.id
+                FROM purchases pur JOIN products p ON pur.item_id = p.id
                 WHERE pur.buyer_id = %s AND pur.item_id < 100000
                 
                 UNION ALL
@@ -469,8 +502,7 @@ def get_user_purchases(user_id: int):
                 SELECT i.id + 100000 AS id, NULL AS asin, i.name AS name, i.price AS price, 
                        i.tags AS tags, i.description AS description, i.image_url AS image_url, 
                        i.status AS status, i.item_condition AS item_condition, i.seller_nickname AS seller_name, pur.id as pur_id
-                FROM purchases pur
-                JOIN items i ON (pur.item_id - 100000) = i.id
+                FROM purchases pur JOIN items i ON (pur.item_id - 100000) = i.id
                 WHERE pur.buyer_id = %s AND pur.item_id >= 100000
                 
                 ORDER BY pur_id DESC;
@@ -491,7 +523,6 @@ def suggest_description(data: dict):
     if not item_name: 
         raise HTTPException(status_code=400, detail="商品名が必要です")
     try:
-        # 💡 プロンプトを「信頼と誠実のトップセラー」にチューニングし、NGワードを指定
         prompt = f"""あなたは日本の大人気フリマアプリ（メルカリなど）でクリーンに月商100万円を売り上げる、購入者から圧倒的信頼を得ている伝説のトップセラーです。
 ユーザーが入力した商品名をもとに、購入者の物欲を刺激しつつも、規約違反にならない誠実で「そのままコピペして使える完成された商品説明文」を1つだけ作成してください。
 
@@ -499,10 +530,9 @@ def suggest_description(data: dict):
 1. 「〇〇の説明文ですね！」などの前置き、挨拶、終わりの会話文は、1文字とも出力しないでください。
 2. 「パターン1」「パターン2」などの複数提案や、キャッチコピーの箇条書きは絶対に禁止です。最初から最高の一着としての文章を1パターンだけ作成してください。
 3. 出力するテキストは、フリマの「商品説明欄にそのまま貼り付けられる本文」のみとしてください。
-4. 過大広告や偽ブランドの表示などは絶対にしないでください。あくまでも事実に基づき、購入者の物欲をスマートに刺激するよう努めてください。
-5. 「奇跡」「運命」「最高峰」「一級品」「早い者勝ち」「絶対」「間違いなく」といった表現は含めても構いませんが、購入を過度に煽る誇張表現やスパム的な売り文句を多用しないでください。
-6. フリマの一般的な出品禁止物（武器、違法薬物、処方箋医薬品、偽ブランド品・スーパーコピー、詐欺・情報商材、成人向けコンテンツなど）に該当、あるいは規約違反の可能性のある説明文を絶対に出力しないでください。
-7. 文字数は200字程度とし、無駄に長く、冗長になることは避けてください。
+4. 過大広告や偽ブランドの表示などは絶対にしないでください。
+5. 「奇跡」「運命」「最高峰」「一級品」「早い者勝ち」といった表現は含めても構いませんが、購入を過度に煽る誇張表現を多用しないでください。
+6. 文字数は200字程度とし、無駄に長く、冗長になることは避けてください。
 
 商品名: {item_name}"""
         response = client.models.generate_content(
@@ -535,7 +565,6 @@ def suggest_price(data: dict):
 【⚠️ 査定における数理的重み付けのルール】
 1. 「商品の状態」が『傷や汚れあり』や『全体的に状態が悪い』の場合は、ジャンルごとの標準相場から30%〜70%大幅に減額した、現実的に売れる価格にしてください。
 2. 「商品の状態」が『新品・未使用』『未使用に近い』の場合でも、中古であることを考慮して、高すぎる値段をつけないようにしてください。
-特に、本来の相場を超える金額を出力しないでください。
 3. 出力は査定した金額の「数字（整数）」のみとし、「円」や「¥」、カンマ（,）、解説テキストは絶対に1文字も含めないでください。
    例：4500円が適正なら「4500」とだけ出力。
 
@@ -558,3 +587,141 @@ def suggest_price(data: dict):
         raise HTTPException(status_code=500, detail="AIが有効な数値を生成できませんでした。もう一度お試しください。")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+# ===================================================
+# 📦 5. 取引画面・メッセージ・通知・ウィッシュリスト用 新設API
+# ===================================================
+
+@router.get("/api/transactions/{transaction_id}")
+def get_transaction_detail(transaction_id: int):
+    """特定の取引画面用の統合データ一括取得API"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                SELECT t.id AS transaction_id, t.status AS transaction_status, t.buyer_id, t.seller_id,
+                       COALESCE(i.name, p.name) AS item_name, COALESCE(i.image_url, p.image_url) AS item_image_url, COALESCE(i.price, p.price) AS item_price
+                FROM transactions t LEFT JOIN items i ON t.item_id = i.id LEFT JOIN products p ON t.product_id = p.id
+                WHERE t.id = %s;
+            """
+            cursor.execute(sql, (transaction_id,))
+            tx = cursor.fetchone()
+            if not tx: raise HTTPException(status_code=404, detail="取引が見つかりません")
+            return tx
+    finally:
+        connection.close()
+
+
+@router.post("/api/transactions/{transaction_id}/step")
+def progress_transaction_status(transaction_id: int, data: dict):
+    """発送通知 ➔ 受取評価の2段階状態遷移（ステートマシン）API"""
+    current_action_user_id = data.get("user_id")
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT status, buyer_id, seller_id, item_id, product_id FROM transactions WHERE id = %s", (transaction_id,))
+            tx = cursor.fetchone()
+            if not tx: raise HTTPException(status_code=404, detail="取引が存在しません")
+
+            next_status = tx["status"]
+            notif_target_user_id, notif_title, notif_message = None, "", ""
+
+            if tx["status"] == "shipping_pending":
+                if current_action_user_id != tx["seller_id"] and tx["seller_id"] is not None:
+                    raise HTTPException(status_code=403, detail="出品者以外は発送通知を実行できません")
+                next_status, notif_target_user_id = "shipped", tx["buyer_id"]
+                notif_title, notif_message = "🚚 商品が発送されました！", "商品が発送されました。到着後、中身を確認して受取評価をしてください。"
+            elif tx["status"] == "shipped":
+                if current_action_user_id != tx["buyer_id"]:
+                    raise HTTPException(status_code=403, detail="購入者以外は受取評価を完了できません")
+                next_status, notif_target_user_id = "completed", tx["seller_id"]
+                notif_title, notif_message = "🏁 取引がすべて完了しました！", "購入者が受取評価を完了しました。売上金が反映されます。"
+
+            cursor.execute("UPDATE transactions SET status = %s WHERE id = %s", (next_status, transaction_id))
+            
+            if notif_target_user_id:
+                item_hybrid_id = (tx["item_id"] + 100000) if tx["item_id"] else tx["product_id"]
+                cursor.execute("""
+                    INSERT INTO notifications (user_id, title, message, item_id, product_id) VALUES (%s, %s, %s, %s, %s)
+                """, (notif_target_user_id, notif_title, notif_message, item_hybrid_id if tx["item_id"] else None, tx["product_id"] if tx["product_id"] else None))
+
+            connection.commit()
+            return {"status": "success", "next_status": next_status}
+    finally:
+        connection.close()
+
+
+@router.post("/api/transactions/{transaction_id}/messages")
+def send_transaction_message(transaction_id: int, data: dict):
+    """取引画面専用チャットのメッセージ送信用エンドポイント"""
+    sender_id, message = data.get("sender_id"), data.get("message")
+    if not message or not message.strip(): raise HTTPException(status_code=400, detail="メッセージが空です")
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("INSERT INTO transaction_messages (transaction_id, sender_id, message) VALUES (%s, %s, %s)", (transaction_id, sender_id, message.strip()))
+            connection.commit()
+            return {"status": "success"}
+    finally:
+        connection.close()
+
+
+@router.get("/api/transactions/{transaction_id}/messages")
+def get_transaction_messages(transaction_id: int):
+    """取引画面専用チャットの履歴全件取得API"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT sender_id, message, created_at FROM transaction_messages WHERE transaction_id = %s ORDER BY id ASC", (transaction_id,))
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+
+@router.post("/api/wishlists")
+def add_to_wishlist(data: dict):
+    """曖昧な「欲しいイメージ」を多次元空間ベクトルへ圧縮して入荷待ちスタンドバイ"""
+    user_id, keywords = data.get("user_id"), data.get("keywords")
+    if not keywords or not keywords.strip(): raise HTTPException(status_code=400, detail="欲しいイメージを入力してください")
+    try:
+        embed_res = client.models.embed_content(
+            model="gemini-embedding-2", contents=keywords.strip(), config=types.EmbedContentConfig(output_dimensionality=768)
+        )
+        wish_json = json.dumps(embed_res.embeddings[0].values)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI潜在空間展開に失敗: {str(e)}")
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("INSERT INTO wishlists (user_id, keywords, embedding) VALUES (%s, %s, %s)", (user_id, keywords.strip(), wish_json))
+            connection.commit()
+            return {"status": "success", "message": "入荷待ちにAI登録されました！"}
+    finally:
+        connection.close()
+
+
+@router.get("/api/users/{user_id}/notifications")
+def get_user_notifications(user_id: int):
+    """ユーザーごとの通知一覧を降順で一括取得"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT id, title, message, item_id, product_id, is_read, created_at FROM notifications WHERE user_id = %s ORDER BY id DESC", (user_id,))
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+
+@router.post("/api/notifications/{notification_id}/read")
+def mark_notification_as_read(notification_id: int):
+    """通知を既読にするAPI"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("UPDATE notifications SET is_read = TRUE WHERE id = %s", (notification_id,))
+            connection.commit()
+            return {"status": "success"}
+    finally:
+        connection.close()
