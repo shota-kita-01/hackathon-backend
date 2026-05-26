@@ -725,3 +725,27 @@ def mark_notification_as_read(notification_id: int):
             return {"status": "success"}
     finally:
         connection.close()
+
+
+@router.get("/api/users/{user_id}/transactions")
+def get_user_active_transactions(user_id: int):
+    """【新設】ユーザーが購入、または出品している『進行中（未完了）』の取引一覧を全件取得"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            sql = """
+                SELECT 
+                    t.id AS transaction_id, t.status AS transaction_status, t.buyer_id, t.seller_id,
+                    COALESCE(i.name, p.name) AS item_name,
+                    COALESCE(i.image_url, p.image_url) AS item_image_url,
+                    COALESCE(i.price, p.price) AS item_price
+                FROM transactions t
+                LEFT JOIN items i ON t.item_id = i.id
+                LEFT JOIN products p ON t.product_id = p.id
+                WHERE (t.buyer_id = %s OR t.seller_id = %s) AND t.status != 'completed'
+                ORDER BY t.id DESC;
+            """
+            cursor.execute(sql, (user_id, user_id))
+            return cursor.fetchall()
+    finally:
+        connection.close()
