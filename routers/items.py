@@ -95,7 +95,8 @@ def get_items():
                     '新品・未使用' AS item_condition, 
                     '公式出品' AS seller_name, 
                     '1〜2日で発送' AS shipping_days,
-                    NULL AS seller_id -- 💡 公式データ用にはNULLを補完して列数を合わせる
+                    NULL AS seller_id,
+                    NULL AS seller_stance -- 💡 カタログデータ用にはNULLを補完して列数を合わせる
                 FROM products
                 
                 UNION ALL
@@ -113,7 +114,8 @@ def get_items():
                     item_condition AS item_condition, 
                     seller_nickname AS seller_name, 
                     shipping_days AS shipping_days,
-                    seller_id AS seller_id
+                    seller_id AS seller_id,
+                    seller_stance AS seller_stance 
                 FROM items
                 
                 ORDER BY id DESC;
@@ -334,12 +336,12 @@ def get_search_keywords(user_id: int):
 
 @router.post("/api/items/{item_id}/purchase")
 def purchase_item(item_id: int, buyer_data: dict):
-    """購入時に取引管理（transactions）レコード ＆ 出品者への通知を同時自動生成"""
+    """購入時に取引管理（transactions）レコード ＆ 出品者への通知（または公式Bot初期メッセージ）を同時自動生成"""
     buyer_id = buyer_data.get("buyer_id")
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 💡 【バグフィックス】Pythonの大文字NONEおよびNULLエラーをNoneに完全修正
+            # 💡 Pythonの大文字NONEおよびNULLエラーをNoneに完全修正済みの安全宣言
             seller_id, product_id, db_item_id, item_name = None, None, None, ""
 
             if item_id >= 100000:
@@ -369,11 +371,19 @@ def purchase_item(item_id: int, buyer_data: dict):
             cursor.execute(tx_sql, (db_item_id, product_id, buyer_id, seller_id))
             tx_id = cursor.lastrowid
             
-            # ③ 🔔 出品者への通知インサート
+            # ③ 🔔 出品条件に応じた通知 ＆ メッセージの自動分岐処理
             if seller_id:
+                # 👥 一般出品：実在する出品者へ購入通知を送る
                 cursor.execute("""
                     INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
                 """, (seller_id, "🎉 商品が購入されました！", f"出品した「{item_name}」が購入されました。発送手続きを進めてください。", item_id))
+            else:
+                # 🤖 公式カタログ品：やり取り先がいないため、システムBot(sender_id=0)から安心アナウンスを即時注入！
+                bot_msg = "🤖 ご購入ありがとうございます！本商品は公式カタログ品のため、出品者とのやり取りは不要です。倉庫より自動発送されますので、到着まで今しばらくお待ちください。"
+                cursor.execute("""
+                    INSERT INTO transaction_messages (transaction_id, sender_id, message) 
+                    VALUES (%s, 0, %s)
+                """, (tx_id, bot_msg))
             
             cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
             connection.commit()
@@ -384,7 +394,7 @@ def purchase_item(item_id: int, buyer_data: dict):
     finally:
         connection.close()
 
-
+        
 @router.post("/api/items/{item_id}/like")
 def toggle_like(item_id: int, data: dict):
     """【改修】10万以上のIDへのいいねインサート時、外部キーチェックを一時スルー"""
