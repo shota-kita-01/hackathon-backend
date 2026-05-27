@@ -94,7 +94,8 @@ def get_items():
                     status AS status, 
                     '新品・未使用' AS item_condition, 
                     '公式出品' AS seller_name, 
-                    '1〜2日で発送' AS shipping_days 
+                    '1〜2日で発送' AS shipping_days,
+                    NULL AS seller_id -- 💡 公式データ用にはNULLを補完して列数を合わせる
                 FROM products
                 
                 UNION ALL
@@ -111,7 +112,8 @@ def get_items():
                     status AS status,
                     item_condition AS item_condition, 
                     seller_nickname AS seller_name, 
-                    shipping_days AS shipping_days
+                    shipping_days AS shipping_days,
+                    seller_id AS seller_id
                 FROM items
                 
                 ORDER BY id DESC;
@@ -278,7 +280,8 @@ def get_user_products(user_id: int):
                     status AS status,
                     item_condition AS item_condition, 
                     seller_nickname AS seller_name, 
-                    shipping_days AS shipping_days
+                    shipping_days AS shipping_days,
+                    seller_id AS seller_id
                 FROM items
                 WHERE seller_id = %s
                 ORDER BY id DESC;
