@@ -773,3 +773,28 @@ def get_user_completed_transactions(user_id: int):
             return cursor.fetchall()
     finally:
         connection.close()
+
+
+@router.get("/api/users/{user_id}/wishlists")
+def get_user_wishlists(user_id: int):
+    """【新設】ユーザーが登録した入荷待ち（ウィッシュリスト）キーワードの一覧を取得"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT id, keywords, created_at FROM wishlists WHERE user_id = %s ORDER BY id DESC", (user_id,))
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+
+@router.delete("/api/wishlists/{wishlist_id}")
+def delete_wishlist(wishlist_id: int):
+    """【新設】不要になった入荷待ち登録を解除（削除）するAPI"""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM wishlists WHERE id = %s", (wishlist_id,))
+            connection.commit()
+            return {"status": "success", "message": "入荷待ち登録を解除しました"}
+    finally:
+        connection.close()
