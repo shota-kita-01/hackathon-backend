@@ -798,3 +798,157 @@ def delete_wishlist(wishlist_id: int):
             return {"status": "success", "message": "入荷待ち登録を解除しました"}
     finally:
         connection.close()
+
+
+# ===================================================
+# 🥊 6. 【新設】AI代理交渉エージェント（利害調停数理インフラ）
+# ===================================================
+
+@router.post("/api/items/{item_id}/negotiate")
+def negotiate_item_price(item_id: int, data: dict):
+    """【新設】購入者の希望価格と熱意文を、出品者の隠しデッドラインと照らし合わせてGeminiが3分岐調停するAPI"""
+    if item_id < 100000:
+        raise HTTPException(status_code=400, detail="公式カタログ商品は固定価格のため、価格交渉の対象外です。")
+        
+    raw_id = item_id - 100000
+    buyer_id = data.get("buyer_id")
+    wish_price = data.get("wish_price")
+    buyer_message = data.get("message")
+    
+    if not wish_price or not buyer_message or not buyer_message.strip():
+        raise HTTPException(status_code=400, detail="希望価格と熱意文を共に入力してください。")
+        
+    try:
+        connection = get_db_connection()
+        with connection.cursor() as cursor:
+            # 売り手側の隠し条件をデータベースの潜在空間から密かにハント
+            cursor.execute("SELECT name, price, min_acceptable_price, seller_stance, seller_id, status FROM items WHERE id = %s", (raw_id,))
+            item = cursor.fetchone()
+            if not item: raise HTTPException(status_code=404, detail="商品が見つかりません")
+            if item["status"] == "sold_out": raise HTTPException(status_code=400, detail="この商品はすでに売り切れています。")
+                
+            current_price = item["price"]
+            min_acceptable_price = item["min_acceptable_price"] if item["min_acceptable_price"] is not None else current_price
+            seller_stance = item["seller_stance"] if item["seller_stance"] else "急いでいない"
+            seller_id = item["seller_id"]
+            item_name = item["name"]
+            
+            # 🧠 厳格な判定ルールを焼き付けたプロンプトをGeminiへ流し込む
+            prompt = f"""あなたは一流のフリマアプリの仲裁AI（調停エージェント）です。
+購入者から届いた「希望価格」と「熱意文」を、出品者の「販売条件」と照らし合わせて、経済学的かつ心理的に中立な立場から以下の3つの結論（status）のいずれかを下してください。
+
+【販売条件】
+・現在の出品価格: {current_price}円
+・出品者が絶対に譲れない最低価格: {min_acceptable_price}円
+・出品者のスタンス: {seller_stance}
+
+【購入者からの提案】
+・希望価格: {wish_price}円
+・熱意文: {buyer_message}
+
+【ジャッジの鉄則】
+1. 希望価格が出品者の最低価格({min_acceptable_price}円)を1円でも下回っている場合は、無条件で [REJECT（拒否）] としてください。
+2. 希望価格が最低価格以上であり、且つ購入者の熱意文が非常に丁寧で誠実である、または出品者のスタンスが「売り切りたい」の場合は、買い手の希望価格をそのまま適用し [ACCEPT（一発成立）] としてください。
+3. 希望価格が最低価格以上ではあるが、出品者のスタンスが「急いでいない」場合、または熱意文がシンプルすぎる場合は、現在の価格と希望価格のちょうど中間付近（出品者の最低価格を下回らない範囲）の価格を計算し [COUNTER（妥協案提示）] としてください。
+
+出力は必ず以下のJSONフォーマットのみとしてください。
+{{
+  "status": "ACCEPT" または "REJECT" または "COUNTER",
+  "settlement_price": 最終決定した金額（整数）,
+  "ai_message": "購入者と出品者の双方を納得させる、AIからの丁寧な仲裁メッセージ文（日本語）"
+}}"""
+
+            res = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.1)
+            )
+
+            raw_text = res.text.strip()
+            
+            backticks = "`" * 3
+            if raw_text.startswith(backticks):
+                lines = raw_text.splitlines()
+                if lines[0].startswith(backticks): lines = lines[1:]
+                if lines[-1].startswith(backticks): lines = lines[:-1]
+                raw_text = "\n".join(lines).strip()
+                
+            ai_decision = json.loads(raw_text)
+            status = ai_decision.get("status", "REJECT")
+            settlement_price = int(ai_decision.get("settlement_price", current_price))
+            ai_message = ai_decision.get("ai_message", "交渉が整いませんでした。")
+            
+            if status == "ACCEPT" and settlement_price < min_acceptable_price:
+                status = "REJECT"
+                
+            transaction_id = None
+            
+            # ⚡ 【ACCEPT（一発成立）の場合の裏側自動決済＆取引生成】
+            if status == "ACCEPT":
+                cursor.execute("SET FOREIGN_KEY_CHECKS=0;")
+                cursor.execute("UPDATE items SET price = %s, status = 'sold_out' WHERE id = %s", (settlement_price, raw_id))
+                cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
+                
+                tx_sql = "INSERT INTO transactions (item_id, product_id, buyer_id, seller_id, status) VALUES (%s, NULL, %s, %s, 'shipping_pending')"
+                cursor.execute(tx_sql, (raw_id, buyer_id, seller_id))
+                transaction_id = cursor.lastrowid
+                
+                if seller_id:
+                    cursor.execute("""
+                        INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
+                    """, (seller_id, "🤝 AI代理交渉により商品が即時売却されました！", 
+                          f"出品した「{item_name}」が、AI調停エージェントの仲裁により {settlement_price}円 で合意に達し、自動決済されました。取引画面を確認してください。", item_id))
+                
+                cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
+                connection.commit()
+                
+            return {
+                "status": status,
+                "settlement_price": settlement_price,
+                "ai_message": ai_message,
+                "transaction_id": transaction_id
+            }
+    except Exception as e:
+        if 'connection' in locals(): connection.rollback()
+        return {"status": "ERROR", "ai_message": f"AI調停中にシステムエラーが発生しました: {str(e)}"}
+    finally:
+        if 'connection' in locals(): connection.close()
+
+
+@router.post("/api/items/{item_id}/negotiate/confirm")
+def confirm_counter_price(item_id: int, data: dict):
+    """【新設】AIが提示した妥協案（COUNTER）を購入者が「その価格で承諾する」と決断した瞬間の最終決済API"""
+    try:
+        connection = get_db_connection()
+        with connection.cursor() as cursor:
+            raw_id = item_id - 100000
+            buyer_id = data.get("buyer_id")
+            settlement_price = data.get("settlement_price")
+
+            cursor.execute("SELECT name, seller_id, status FROM items WHERE id = %s", (raw_id,))
+            item = cursor.fetchone()
+            if not item or item["status"] == "sold_out":
+                raise HTTPException(status_code=400, detail="商品がすでに売り切れているか、見つかりません。")
+                
+            cursor.execute("SET FOREIGN_KEY_CHECKS=0;")
+            cursor.execute("UPDATE items SET price = %s, status = 'sold_out' WHERE id = %s", (settlement_price, raw_id))
+            cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
+            
+            tx_sql = "INSERT INTO transactions (item_id, product_id, buyer_id, seller_id, status) VALUES (%s, NULL, %s, %s, 'shipping_pending')"
+            cursor.execute(tx_sql, (raw_id, buyer_id, item["seller_id"]))
+            tx_id = cursor.lastrowid
+            
+            if item["seller_id"]:
+                cursor.execute("""
+                    INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
+                """, (item["seller_id"], "🤝 AI妥協案により価格交渉が成立しました！", 
+                      f"出品した「{item['name']}」が、AI提示の妥協案（{settlement_price}円）で購入者により承諾され、取引が成立しました。", item_id))
+                
+            cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
+            connection.commit()
+            return {"status": "success", "transaction_id": tx_id}
+    except Exception as e:
+        if 'connection' in locals(): connection.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if 'connection' in locals(): connection.close()
