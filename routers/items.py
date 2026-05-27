@@ -201,17 +201,27 @@ def create_item(item_data: dict):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
+            # 💡 【改修】インサート文に min_acceptable_price と seller_stance を追記
             sql = """
                 INSERT INTO items (
-                    name, description, price, image_url, 
+                    name, description, price, min_acceptable_price, seller_stance, image_url, 
                     seller_id, tags, status, item_condition, seller_nickname, shipping_days, embedding
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, 'on_sale', %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'on_sale', %s, %s, %s, %s)
             """
+            
+            # 💡 フロントから値がない場合の安全なデフォルト挙動を定義
+            current_price = int(item_data.get("price", 0))
+            min_price = item_data.get("min_acceptable_price")
+            min_acceptable_price = int(min_price) if min_price else current_price
+            seller_stance = item_data.get("seller_stance", "急いでいない")
+
             cursor.execute(sql, (
                 item_data.get("name"),
                 item_data.get("description"),
-                item_data.get("price"),
+                current_price,
+                min_acceptable_price, # 追記
+                seller_stance,        # 追記
                 item_data.get("image_url"),
                 item_data.get("seller_id"),
                 item_data.get("tags", "一般出品"),
