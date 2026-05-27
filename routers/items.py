@@ -236,7 +236,7 @@ def create_item(item_data: dict):
                     norm2 = math.sqrt(sum(b * b for b in wish_vector))
                     sim = dot / (norm1 * norm2 + 1e-9)
 
-                    if sim >= 0.85:
+                    if sim >= 0.55:
                         match_percent = round(sim * 100, 1)
                         cursor.execute("""
                             INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
