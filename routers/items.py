@@ -968,37 +968,43 @@ def confirm_counter_price(item_id: int, data: dict):
 
 @router.put("/api/items/{item_id}")
 def update_item_detail(item_id: int, item_data: dict):
-    """【新設】出品者が既存の商品内容を訂正（上書き保存）するAPI（潜在空間ベクトルも自動再計算）"""
+    """【新設】出品者が既存の商品内容を訂正（上書き保存）するAPI（ステータスガード ＆ 潜在空間ベクトル自動再計算）"""
     if item_id < 100000:
         raise HTTPException(status_code=400, detail="公式カタログ商品は編集できません。")
         
     raw_id = item_id - 100000  # 💡 仮想ID空間から本物のDBのプライマリキーへ逆コンバート
 
-    # 🧠 商品内容が変わるため、Geminiの潜在空間ベクトル（Embedding）も最計算して同期
-    structured_text = f"""
-    Product Characteristics:
-    - Title: {item_data.get("name")}
-    - Category: {item_data.get("tags")}
-    - Core Context: {item_data.get("description")}
-    """
-    try:
-        embed_res = client.models.embed_content(
-            model="gemini-embedding-2",
-            contents=structured_text,
-            config=types.EmbedContentConfig(output_dimensionality=768)
-        )
-        embedding_vector = embed_res.embeddings[0].values
-        embedding_json = json.dumps(embedding_vector)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"【AI空間再配置エラー】ベクトルの更新に失敗しました: {str(e)}")
-
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 💡 編集された商品が存在するか安全チェック
-            cursor.execute("SELECT id FROM items WHERE id = %s", (raw_id,))
-            if not cursor.fetchone():
+            # 🛑 【防弾ガード1】対象の商品が存在するか、そして現在のステータスが何かをハント
+            cursor.execute("SELECT status FROM items WHERE id = %s", (raw_id,))
+            item = cursor.fetchone()
+            
+            if not item:
                 raise HTTPException(status_code=404, detail="対象の商品が存在しません。")
+            
+            # 🛑 【防弾ガード2】販売中（on_sale）以外のステータス（取引中や売り切れなど）なら即座に門前払い
+            if item["status"] != "on_sale":
+                raise HTTPException(status_code=400, detail="販売中以外の商品は、安全上の理由から内容の訂正ができません。")
+
+            # 🧠 【AI空間同期】ステータスチェックを通過したら、Geminiの潜在空間ベクトル（Embedding）を再計算
+            structured_text = f"""
+            Product Characteristics:
+            - Title: {item_data.get("name")}
+            - Category: {item_data.get("tags")}
+            - Core Context: {item_data.get("description")}
+            """
+            try:
+                embed_res = client.models.embed_content(
+                    model="gemini-embedding-2",
+                    contents=structured_text,
+                    config=types.EmbedContentConfig(output_dimensionality=768)
+                )
+                embedding_vector = embed_res.embeddings[0].values
+                embedding_json = json.dumps(embedding_vector)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"【AI空間再配置エラー】ベクトルの更新に失敗しました: {str(e)}")
 
             # 🛠️ すべてのメタデータとAI数理調停パラメータを一括UPDATE
             sql = """
