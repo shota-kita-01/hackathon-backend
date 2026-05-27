@@ -246,7 +246,7 @@ def create_item(item_data: dict):
                     norm2 = math.sqrt(sum(b * b for b in wish_vector))
                     sim = dot / (norm1 * norm2 + 1e-9)
 
-                    if sim >= 0.55:
+                    if sim >= 0.50:
                         match_percent = round(sim * 100, 1)
                         cursor.execute("""
                             INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
@@ -962,3 +962,84 @@ def confirm_counter_price(item_id: int, data: dict):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if 'connection' in locals(): connection.close()
+
+@router.put("/api/items/{item_id}")
+def update_item_detail(item_id: int, item_data: dict):
+    """【新設】出品者が既存の商品内容を訂正（上書き保存）するAPI（潜在空間ベクトルも自動再計算）"""
+    if item_id < 100000:
+        raise HTTPException(status_code=400, detail="公式カタログ商品は編集できません。")
+        
+    raw_id = item_id - 100000  # 💡 仮想ID空間から本物のDBのプライマリキーへ逆コンバート
+
+    # 🧠 商品内容が変わるため、Geminiの潜在空間ベクトル（Embedding）も最計算して同期
+    structured_text = f"""
+    Product Characteristics:
+    - Title: {item_data.get("name")}
+    - Category: {item_data.get("tags")}
+    - Core Context: {item_data.get("description")}
+    """
+    try:
+        embed_res = client.models.embed_content(
+            model="gemini-embedding-2",
+            contents=structured_text,
+            config=types.EmbedContentConfig(output_dimensionality=768)
+        )
+        embedding_vector = embed_res.embeddings[0].values
+        embedding_json = json.dumps(embedding_vector)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"【AI空間再配置エラー】ベクトルの更新に失敗しました: {str(e)}")
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            # 💡 編集された商品が存在するか安全チェック
+            cursor.execute("SELECT id FROM items WHERE id = %s", (raw_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="対象の商品が存在しません。")
+
+            # 🛠️ すべてのメタデータとAI数理調停パラメータを一括UPDATE
+            sql = """
+                UPDATE items 
+                SET 
+                    name = %s, 
+                    description = %s, 
+                    price = %s, 
+                    min_acceptable_price = %s, 
+                    seller_stance = %s, 
+                    image_url = %s, 
+                    tags = %s, 
+                    item_condition = %s, 
+                    seller_nickname = %s, 
+                    shipping_days = %s,
+                    embedding = %s
+                WHERE id = %s
+            """
+            
+            current_price = int(item_data.get("price", 0))
+            min_price = item_data.get("min_acceptable_price")
+            min_acceptable_price = int(min_price) if min_price else current_price
+            seller_stance = item_data.get("seller_stance", "急いでいない")
+
+            cursor.execute(sql, (
+                item_data.get("name"),
+                item_data.get("description"),
+                current_price,
+                min_acceptable_price,
+                seller_stance,
+                item_data.get("image_url"),
+                item_data.get("tags"),
+                item_data.get("item_condition"),
+                item_data.get("seller_nickname"),
+                item_data.get("shipping_days"),
+                embedding_json,
+                raw_id  # WHERE句の指定
+            ))
+            
+            connection.commit()
+            return {"status": "success", "message": "商品の出品内容が上書き保存されました！"}
+            
+    except Exception as e:
+        connection.rollback()
+        raise e
+    finally:
+        connection.close()
