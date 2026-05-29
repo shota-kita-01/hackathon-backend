@@ -5,7 +5,7 @@ from db import get_db_connection
 router = APIRouter()
 
 # ===================================================
-# 🧠 1. 検索画面用：AI Mood ベクトル検索 ＆ 絞り込み
+# 🧠 1. 検索画面用：AI Mood ベクトル検索 ＆ 絞り込み（変更なし）
 # ===================================================
 @router.post("/api/recommend")
 def get_mood_recommendations(data: RecommendRequest, request: Request):
@@ -39,7 +39,7 @@ def get_mood_recommendations(data: RecommendRequest, request: Request):
 
 
 # ===================================================
-# 🛰️ 2. 詳細画面用：確率的時間遷移 ＆ 空間的類似
+# 🛰️ 2. 詳細画面用：確率的時間遷移 ＆ 空間的類似（変更なし）
 # ===================================================
 @router.get("/api/recommendations/{asin}")
 def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
@@ -82,7 +82,7 @@ def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
 
 
 # ===================================================
-# 🏠 3. ホーム画面用：3段パーソナライズ統合エンドポイント
+# 🏠 3. ホーム画面用：3段パーソナライズ統合エンドポイント（✨ココをハック！）
 # ===================================================
 @router.get("/api/home/{user_id}")
 def get_home_dashboard(user_id: int):
@@ -117,11 +117,11 @@ def get_home_dashboard(user_id: int):
 
             # 🛠️ 指定カテゴリーから、公式と一般出品を混ぜたハイブリッドプールからランダムに取得するサブクエリ
             def get_items_by_cat(category, limit=5):
-                # 💡 一般出品のIDに一律 100000 を足すように修正！
+                # 💡 【改修①】内側の products 側を COALESCE(ai_image_url, image_url) に換装
                 sql = """
                     SELECT id, asin, name, price, tags, description, image_url, status, item_condition, seller_name, shipping_days
                     FROM (
-                        SELECT id, asin, name, price, ai_category AS tags, description, image_url, status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, '1〜2日で発送' AS shipping_days FROM products
+                        SELECT id, asin, name, price, ai_category AS tags, description, COALESCE(ai_image_url, image_url) AS image_url, status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, '1〜2日で発送' AS shipping_days FROM products
                         UNION ALL
                         SELECT id + 100000 AS id, NULL AS asin, name, price, tags, description, image_url, status, item_condition, seller_nickname AS seller_name, shipping_days FROM items
                     ) as hybrid_pool
@@ -135,11 +135,11 @@ def get_home_dashboard(user_id: int):
             if user_cats:
                 top_3_cats = [c['ai_category'] for c in user_cats[:3]]
                 format_strings = ','.join(['%s'] * len(top_3_cats))
-                # 💡 ここも一般出品のIDに 100000 を加算！
+                # 💡 【改修②】内側の products 側を COALESCE(ai_image_url, image_url) に換装
                 sql = f"""
                     SELECT id, asin, name, price, tags, description, image_url, status, item_condition, seller_name, shipping_days
                     FROM (
-                        SELECT id, asin, name, price, ai_category AS tags, description, image_url, status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, '1〜2日で発送' AS shipping_days FROM products
+                        SELECT id, asin, name, price, ai_category AS tags, description, COALESCE(ai_image_url, image_url) AS image_url, status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, '1〜2日で発送' AS shipping_days FROM products
                         UNION ALL
                         SELECT id + 100000 AS id, NULL AS asin, name, price, tags, description, image_url, status, item_condition, seller_nickname AS seller_name, shipping_days FROM items
                     ) as hybrid_pool
@@ -149,11 +149,11 @@ def get_home_dashboard(user_id: int):
                 cursor.execute(sql, tuple(top_3_cats))
                 personalized_top5 = cursor.fetchall()
             else:
-                # 💡 ここも一般出品のIDに 100000 を加算！
+                # 💡 【改修③】内側の products 側を COALESCE(ai_image_url, image_url) に換装
                 sql = """
                     SELECT id, asin, name, price, tags, description, image_url, status, item_condition, seller_name, shipping_days
                     FROM (
-                        SELECT id, asin, name, price, ai_category AS tags, description, image_url, status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, '1〜2日で発送' AS shipping_days FROM products
+                        SELECT id, asin, name, price, ai_category AS tags, description, COALESCE(ai_image_url, image_url) AS image_url, status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, '1〜2日で発送' AS shipping_days FROM products
                         UNION ALL
                         SELECT id + 100000 AS id, NULL AS asin, name, price, tags, description, image_url, status, item_condition, seller_nickname AS seller_name, shipping_days FROM items
                     ) as hybrid_pool
