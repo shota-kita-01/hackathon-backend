@@ -207,7 +207,7 @@ def create_item(item_data: dict):
     if is_empty_image:
         print(f"🎨 [AI画像生成トリガー発動] 商品名: {item_name}")
         try:
-            # 1. 日本語のコンテキストから英語プロンプトを錬金
+            # 1. 日本語のコンテキストから英語プロンプトを錬金（これは既存のAI Studio経由のままでOK）
             prompt_alchemy = f"""
         Based on the following Japanese flea market product title and description, 
         generate a highly detailed and optimized English prompt for a text-to-image model (Imagen 3).
@@ -228,13 +228,21 @@ def create_item(item_data: dict):
                 contents=prompt_alchemy
             )
             imagen_prompt = prompt_res.text.strip()
-
-            # 2. Imagen 3 を召喚
             print(f"   ➔ 錬金されたプロンプト: {imagen_prompt}")
-            imagen_res = client.models.generate_images(
+
+            # 🚀【Vertex AI専用クライアントの召喚】404エラーを完全に打破
+            from google import genai
+            vertex_client = genai.Client(
+                vertexai=True,
+                project="term9-shota-kita",
+                location="us-central1"
+            )
+
+            # 2. Imagen 3 を召喚（AI Studioではなく、昨日実績のあったVertex AIのルートでスナイプ）
+            imagen_res = vertex_client.models.generate_images(
                 model="imagen-3.0-generate-002",
                 prompt=imagen_prompt,
-                config=types.GenerateImagesConfig(
+                config=types.GenerateImagesConfig(  # 💡 sの付いた複数形で完全防弾化
                     number_of_images=1,
                     output_mime_type="image/png",
                     aspect_ratio="4:3"
