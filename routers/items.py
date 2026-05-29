@@ -209,14 +209,20 @@ def create_item(item_data: dict):
         try:
             # 1. 日本語のコンテキストから英語プロンプトを錬金
             prompt_alchemy = f"""
-            Based on the following Japanese flea market product title and description, 
-            generate a highly detailed and optimized english prompt for a text-to-image model (Imagen 3).
-            The prompt should describe a realistic marketplace photo of the item, neatly placed on a wooden table or clean carpet, natural lighting, looking like a real smartphone photo taken by a seller.
-            Do not include any background talk or markdown, return only the prompt text.
+        Based on the following Japanese flea market product title and description, 
+        generate a highly detailed and optimized English prompt for a text-to-image model (Imagen 3).
 
-            Title: {item_name}
-            Description: {item_description}
-            """
+        【STRICT RULES】
+        1. The main subject of the image MUST be the physical object explicitly stated in the "Title" below. 
+           Do NOT be confused by poetic, abstract, or emotional marketing words in the "Description". 
+           (e.g., If Title is "ヘッドホン", the image MUST be a physical pair of headphones, never anything else.)
+        2. The prompt must describe a realistic marketplace photo of that item, neatly placed on a wooden table or clean carpet, natural lighting, looking like a real smartphone photo taken by a seller.
+        3. Do not include any background talk or markdown, return only the prompt text.
+
+        Title: {item_name}
+        Description: {item_description}
+        """
+            
             prompt_res = client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=prompt_alchemy
