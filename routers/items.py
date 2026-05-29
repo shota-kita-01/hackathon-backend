@@ -24,7 +24,7 @@ def get_all_products():
                     price AS price, 
                     ai_category AS tags, 
                     description AS description, 
-                    image_url AS image_url, 
+                    COALESCE(ai_image_url, image_url) AS image_url, 
                     status AS status,
                     '新品・未使用' AS item_condition, 
                     '公式出品' AS seller_name, 
@@ -51,7 +51,7 @@ def get_product_detail(asin: str):
                     price AS price, 
                     ai_category AS tags,
                     description AS description, 
-                    image_url AS image_url, 
+                    COALESCE(ai_image_url, image_url) AS image_url, 
                     status AS status,
                     '新品・未使用' AS item_condition, 
                     '公式出品' AS seller_name,
@@ -90,7 +90,7 @@ def get_items():
                     price AS price, 
                     ai_category AS tags, 
                     description AS description, 
-                    image_url AS image_url, 
+                    COALESCE(ai_image_url, image_url) AS image_url,
                     status AS status, 
                     '新品・未使用' AS item_condition, 
                     '公式出品' AS seller_name, 
@@ -238,7 +238,7 @@ def create_item(item_data: dict):
             new_item_raw_id = cursor.lastrowid
             new_item_hybrid_id = new_item_raw_id + 100000
 
-            # 📡【潜在空間逆マッチング】全ユーザーの入荷待ちベクトルと高速内積計算
+            # 【潜在空間逆マッチング】全ユーザーの入荷待ちベクトルと高速内積計算
             cursor.execute("SELECT user_id, keywords, embedding FROM wishlists")
             all_wishes = cursor.fetchall()
 
@@ -429,7 +429,7 @@ def get_user_likes(user_id: int):
                 -- ① 公式データのいいね
                 SELECT 
                     p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
-                    p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
+                    p.ai_category AS tags, p.description AS description, COALESCE(p.ai_image_url, p.image_url) AS image_url, 
                     p.status AS status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, TRUE AS is_liked, l.id AS like_log_id
                 FROM likes l 
                 JOIN products p ON l.item_id = p.id
@@ -481,7 +481,7 @@ def get_user_views(user_id: int):
                 SELECT id, asin, name, price, tags, description, image_url, status, item_condition, seller_name
                 FROM (
                     SELECT p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
-                           p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
+                           p.ai_category AS tags, p.description AS description, COALESCE(p.ai_image_url, p.image_url) AS image_url, 
                            p.status AS status, '新品・未使用' AS item_condition, '公式出品' AS seller_name,
                            MAX(v.id) as max_v_id
                     FROM item_views v JOIN products p ON v.item_id = p.id
@@ -515,7 +515,7 @@ def get_user_purchases(user_id: int):
         with connection.cursor() as cursor:
             sql = """
                 SELECT p.id AS id, p.asin AS asin, p.name AS name, p.price AS price, 
-                       p.ai_category AS tags, p.description AS description, p.image_url AS image_url, 
+                       p.ai_category AS tags, p.description AS description, COALESCE(p.ai_image_url, p.image_url) AS image_url, 
                        p.status AS status, '新品・未使用' AS item_condition, '公式出品' AS seller_name, pur.id as pur_id
                 FROM purchases pur JOIN products p ON pur.item_id = p.id
                 WHERE pur.buyer_id = %s AND pur.item_id < 100000
@@ -624,7 +624,7 @@ def get_transaction_detail(transaction_id: int):
         with connection.cursor() as cursor:
             sql = """
                 SELECT t.id AS transaction_id, t.status AS transaction_status, t.buyer_id, t.seller_id,
-                       COALESCE(i.name, p.name) AS item_name, COALESCE(i.image_url, p.image_url) AS item_image_url, COALESCE(i.price, p.price) AS item_price
+                       COALESCE(i.name, p.name) AS item_name, COALESCE(i.image_url, p.ai_image_url, p.image_url) AS item_image_url, COALESCE(i.price, p.price) AS item_price
                 FROM transactions t LEFT JOIN items i ON t.item_id = i.id LEFT JOIN products p ON t.product_id = p.id
                 WHERE t.id = %s;
             """
