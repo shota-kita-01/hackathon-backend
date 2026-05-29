@@ -3,9 +3,10 @@ from google.genai import types
 from db import get_db_connection, client
 import json
 import math
-import time  # 👈 自動画像命名用・時間計測用に追記
-import io    # 👈 画像バイナリ転送用に追記
-from google.cloud import storage  # 👈 GCSアップロード用に追記
+import time
+import io
+from google.cloud import storage 
+import uuid
 
 router = APIRouter()
 
@@ -233,7 +234,7 @@ def create_item(item_data: dict):
             bucket = storage_client.bucket(bucket_name)
             
             # 衝突を防ぐユニークなファイル名生成
-            filename = f"products/user_generated_{int(time.time())}.png"
+            filename = f"products/user_generated_{int(time.time())}_{uuid.uuid4().hex[:6]}.png"
             blob = bucket.blob(filename)
             
             blob.upload_from_file(io.BytesIO(image_bytes), content_type="image/png")

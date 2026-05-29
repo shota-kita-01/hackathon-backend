@@ -7,3 +7,4 @@ scikit-learn
 google-genai
 google-generativeai
 datasets
+google-cloud-storage
