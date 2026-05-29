@@ -234,7 +234,7 @@ def create_item(item_data: dict):
             imagen_res = client.models.generate_images(
                 model="imagen-3.0-generate-002",
                 prompt=imagen_prompt,
-                config=types.GenerateImageConfig(
+                config=types.GenerateImagesConfig(
                     number_of_images=1,
                     output_mime_type="image/png",
                     aspect_ratio="4:3"
