@@ -191,13 +191,23 @@ def create_item(item_data: dict):
     """ユーザーが出品画面から入力した内容を、一般出品テーブル（items）へ格納 ＆ 📡潜在空間逆マッチングアラート"""
     item_name = item_data.get("name")
     item_description = item_data.get("description")
-    image_url = item_data.get("image_url")
+    raw_image_url = item_data.get("image_url")
 
-    # ✨【自動画像生成ハック】画像URLフィールドが空欄、または空文字の場合のみ特権発動！
-    if not image_url or image_url.strip() == "":
+    # 🛡️ 【ガチガチ判定ハック】フロントから "null" や "undefined" などの文字列が届いても確実に検知する
+    is_empty_image = False
+    if raw_image_url is None:
+        is_empty_image = True
+    elif isinstance(raw_image_url, str):
+        clean_url = raw_image_url.strip().lower()
+        if clean_url in ["", "null", "undefined", "none"]:
+            is_empty_image = True
+
+    image_url = raw_image_url
+
+    if is_empty_image:
         print(f"🎨 [AI画像生成トリガー発動] 商品名: {item_name}")
         try:
-            # 1. 日本語のコンテキストから英霊プロンプトを錬金
+            # 1. 日本語のコンテキストから英語プロンプトを錬金
             prompt_alchemy = f"""
             Based on the following Japanese flea market product title and description, 
             generate a highly detailed and optimized english prompt for a text-to-image model (Imagen 3).
@@ -213,7 +223,7 @@ def create_item(item_data: dict):
             )
             imagen_prompt = prompt_res.text.strip()
 
-            # 2. Imagen 3 を召喚して美麗なフリマ写真を1枚ハント
+            # 2. Imagen 3 を召喚
             print(f"   ➔ 錬金されたプロンプト: {imagen_prompt}")
             imagen_res = client.models.generate_images(
                 model="imagen-3.0-generate-002",
@@ -225,7 +235,7 @@ def create_item(item_data: dict):
                 )
             )
             
-            # 3. 生成されたピュアバイナリをGCSバケットへ直接射出アップロード
+            # 3. GCSバケットへ直接アップロード
             generated_image = imagen_res.generated_images[0]
             image_bytes = generated_image.image.image_bytes
             
@@ -233,20 +243,25 @@ def create_item(item_data: dict):
             bucket_name = "term9-shota-kita-images"
             bucket = storage_client.bucket(bucket_name)
             
-            # 衝突を防ぐユニークなファイル名生成
+            # 宇宙が滅びるまで衝突しない完全防弾ファイル名（タイムスタンプ + UUIDハッシュ）
+            import uuid
             filename = f"products/user_generated_{int(time.time())}_{uuid.uuid4().hex[:6]}.png"
             blob = bucket.blob(filename)
             
             blob.upload_from_file(io.BytesIO(image_bytes), content_type="image/png")
             
-            # 最終的な公開URLで外部変数を上書き保存
-            image_url = f"[https://storage.googleapis.com/](https://storage.googleapis.com/){bucket_name}/{filename}"
+            # 最終的な公開URLで上書き
+            image_url = f"https://storage.googleapis.com/{bucket_name}/{filename}"
             print(f"   ➔ 🎉 AI画像生成・アップロード成功: {image_url}")
             
         except Exception as ai_img_err:
-            print(f"⚠️ 画像自動生成中にエラーが発生しました（フォールバックします）: {ai_img_err}")
-            # 万が一エラーが起きてもハッカソンデモを絶対落とさないように安全な実績URLを補完
-            image_url = "[https://storage.googleapis.com/term9-shota-kita-images/products/generated_1.png](https://storage.googleapis.com/term9-shota-kita-images/products/generated_1.png)"
+            # 💡 【重要】ハッカソンのCloud Runログ（Log Viewer）で何のエラーか一発で特定するためにログを強化！
+            print(f"🔥 🚨 【AI画像生成コアエラー】内部で致命的なクラッシュが発生しました: {str(ai_img_err)}")
+            import traceback
+            traceback.print_exc()  # エラーの発生源（スタックトレース）をログに全吐き出しする
+            
+            # 安全弁として既存のダミー画像をセット
+            image_url = "https://storage.googleapis.com/term9-shota-kita-images/products/generated_1.png"
 
     # 🧠 【潜在空間同期】ここからは完全オリジナルの多次元ベクトル化処理へ直結
     structured_text = f"""
