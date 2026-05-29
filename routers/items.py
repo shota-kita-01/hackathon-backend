@@ -1153,3 +1153,30 @@ def update_item_detail(item_id: int, item_data: dict):
         raise e
     finally:
         connection.close()
+
+@router.delete("/api/items/{item_id}")
+def delete_on_sale_item(item_id: int):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            # 1. 該当商品が本当に「販売中（on_sale）」か、数理的チェック
+            cursor.execute("SELECT status FROM items WHERE id = %s", (item_id,))
+            item = cursor.fetchone()
+            
+            if not item:
+                raise HTTPException(status_code=404, detail="商品が見つかりません。")
+            if item["status"] != "on_sale":
+                raise HTTPException(status_code=400, detail="販売中の商品のみ削除可能です。")
+            
+            # 2. 安全装置を一時オフにして、likesやviewsの居残りを無視して一撃で物理削除
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
+            cursor.execute("DELETE FROM items WHERE id = %s", (item_id,))
+            cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
+            
+        connection.commit()
+        return {"status": "success", "message": "出品を削除しました。"}
+    except Exception as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"削除エラー: {str(e)}")
+    finally:
+        connection.close()
