@@ -40,26 +40,36 @@ class RecommendationEngine:
         print(f"   ➔ ロード完了: 公式商品数 {len(self.static_products)} 件 / マルコフ行列 22x22")
 
     def _get_all_items(self):
-        """公式データの最新ステータスをDBから同期し、ユーザー出品データと結合して全アイテムプールを返す"""
+        """【✨ここをハック！】公式データの最新ステータスとAI画像をDBから完全同期し、全アイテムプールを返す"""
         from db import get_db_connection
         
         connection = get_db_connection()
-        product_status_map = {}
+        product_db_map = {}
         try:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT id, status FROM products;")
+                # 💡 SQLを変更：statusだけでなく ai_image_url も一緒にハントする
+                cursor.execute("SELECT id, status, ai_image_url FROM products;")
                 rows = cursor.fetchall()
                 for row in rows:
-                    product_status_map[row["id"]] = row["status"]
+                    product_db_map[row["id"]] = {
+                        "status": row["status"],
+                        "ai_image_url": row["ai_image_url"]
+                    }
         except Exception as e:
-            print(f"⚠️ 公式商品のリアルタイムステータス同期に失敗しました: {e}")
+            print(f"⚠️ 公式商品のリアルタイムステータス・画像同期に失敗しました: {e}")
         finally:
             connection.close()
 
+        # メモリ上の静的データに対して、DBの最新AI画像とステータスをマージ
         for item in self.static_products:
             pid = item.get("id")
-            if pid in product_status_map:
-                item["status"] = product_status_map[pid]
+            if pid in product_db_map:
+                item["status"] = product_db_map[pid]["status"]
+                
+                # 💡 Python版 COALESCE ロジック：AI画像があれば上書き、なければ元のAmazon画像をキープ！
+                db_ai_url = product_db_map[pid]["ai_image_url"]
+                if db_ai_url:
+                    item["image_url"] = db_ai_url
 
         return self.static_products + self._load_user_items()
 
@@ -174,7 +184,7 @@ class RecommendationEngine:
             scored_items.append(product_data)
             
         scored_items.sort(key=lambda x: x["score"], reverse=True)
-        return scored_items[:top_n]
+        return query_vector, scored_items[:top_n]
 
     # ===================================================
     # 🛰️ 詳細画面用：確率的時間遷移 ＆ 空間的類似
@@ -213,7 +223,6 @@ class RecommendationEngine:
             is_self = (item.get("asin") and target_item.get("asin") and item["asin"] == target_item["asin"]) or \
                       (not item.get("asin") and not target_item.get("asin") and item["id"] == target_item["id"])
             
-            # 💡【修正1】アイテムのstatusを取得し、'on_sale' のものだけに制限！
             item_status = item.get("status", "on_sale")
             if not is_self and item_cat == current_cat and v and item_status == "on_sale":
                 sim = cos_sim(target_vector, v)
@@ -238,7 +247,6 @@ class RecommendationEngine:
             item_cat = item.get("ai_category") or item.get("tags")
             v = item.get("embedding") or item.get("embeddings") or item.get("vector")
             
-            # 💡【修正2】時間遷移先おすすめアイテムも、'on_sale' のものだけに厳しく限定！
             item_status = item.get("status", "on_sale")
             if item_cat == next_cat and v and item_status == "on_sale":
                 sim = cos_sim(target_vector, v)
