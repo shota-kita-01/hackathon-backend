@@ -10,7 +10,7 @@ def cos_sim(v1, v2):
 
 class RecommendationEngine:
     def __init__(self):
-        print("🧠 レコメンドエンジンを初期化中...")
+        print("レコメンドエンジンを初期化中...")
         
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
         embeddings_json_path = os.path.join(BASE_DIR, "data", "items_with_embeddings_all_2200.json")
@@ -19,9 +19,9 @@ class RecommendationEngine:
         try:
             with open(embeddings_json_path, "r", encoding="utf-8") as f:
                 self.static_products = json.load(f)
-            print(f"   ➔ ✨ 2,200件の完全版多次元空間データを正常にメモリーへ展開しました。")
+            print(f"   ➔ 2,200件の完全版多次元空間データを正常にメモリーへ展開しました。")
         except FileNotFoundError:
-            print(f"⚠️ {embeddings_json_path} が見つからないため、ベースデータでシミュレートします。")
+            print(f" {embeddings_json_path} が見つからないため、ベースデータでシミュレートします。")
             with open(fallback_json_path, "r", encoding="utf-8") as f:
                 self.static_products = json.load(f)
                 for item in self.static_products:
@@ -47,7 +47,6 @@ class RecommendationEngine:
         product_db_map = {}
         try:
             with connection.cursor() as cursor:
-                # 💡 SQLを変更：statusだけでなく ai_image_url も一緒にハントする
                 cursor.execute("SELECT id, status, ai_image_url FROM products;")
                 rows = cursor.fetchall()
                 for row in rows:
@@ -56,7 +55,7 @@ class RecommendationEngine:
                         "ai_image_url": row["ai_image_url"]
                     }
         except Exception as e:
-            print(f"⚠️ 公式商品のリアルタイムステータス・画像同期に失敗しました: {e}")
+            print(f"公式商品のリアルタイムステータス・画像同期に失敗しました: {e}")
         finally:
             connection.close()
 
@@ -66,7 +65,7 @@ class RecommendationEngine:
             if pid in product_db_map:
                 item["status"] = product_db_map[pid]["status"]
                 
-                # 💡 Python版 COALESCE ロジック：AI画像があれば上書き、なければ元のAmazon画像をキープ！
+                # Python版 COALESCE ロジック：AI画像があれば上書き、なければ元のAmazon画像をキープ！
                 db_ai_url = product_db_map[pid]["ai_image_url"]
                 if db_ai_url:
                     item["image_url"] = db_ai_url
@@ -104,9 +103,9 @@ class RecommendationEngine:
                             row["embedding"] = json.loads(row["embedding"])
                             user_items.append(row)
                         except Exception as e:
-                            print(f"⚠️ ユーザーベクトルのパースに失敗: {e}")
+                            print(f"ユーザーベクトルのパースに失敗: {e}")
         except Exception as e:
-            print(f"⚠️ ユーザー出品データのリアルタイム取得に失敗: {e}")
+            print(f"ユーザー出品データのリアルタイム取得に失敗: {e}")
         finally:
             connection.close()
         return user_items
@@ -130,9 +129,7 @@ class RecommendationEngine:
             data["score"] = score
         return data
 
-    # ===================================================
-    # 🧠 「Ask AI ✨」用の自由テキスト検索
-    # ===================================================
+    # 「Ask AI」用の自由テキスト検索
     def get_products_by_mood(self, mood_text, top_n=500):
         from db import client 
         all_items = self._get_all_items()
@@ -145,10 +142,10 @@ class RecommendationEngine:
                 config=types.EmbedContentConfig(output_dimensionality=768)
             )
             query_vector = response.embeddings[0].values
-            print("💪 gemini-embedding-2 での特権ベクトル化に成功しました！")
+            print("gemini-embedding-2 での特権ベクトル化に成功しました！")
             
         except Exception as e:
-            print(f"⚠️ APIエラー({e}): 緊急テキストマッチエンジンを起動します。")
+            print(f"APIエラー({e}): 緊急テキストマッチエンジンを起動します。")
             
             scored_items = []
             query_str = mood_text.lower().strip()
@@ -186,9 +183,7 @@ class RecommendationEngine:
         scored_items.sort(key=lambda x: x["score"], reverse=True)
         return query_vector, scored_items[:top_n]
 
-    # ===================================================
-    # 🛰️ 詳細画面用：確率的時間遷移 ＆ 空間的類似
-    # ===================================================
+    # 詳細画面用：確率的時間遷移 ＆ 空間的類似
     def get_recommendations(self, target_asin, top_n=3):
         all_items = self._get_all_items()
 
@@ -214,7 +209,7 @@ class RecommendationEngine:
             print(f"🚨 [データ破損を検知] 商品 '{target_item.get('name')}' のベクトルが虚空です。緊急疑似座標を注入します。")
             target_vector = np.random.uniform(-0.02, 0.02, 768).tolist()
 
-        # 🥇 1段目：同じカテゴリーの空間類似推薦
+        # 1段目：同じカテゴリーの空間類似推薦
         space_candidates = []
         for item in all_items:
             item_cat = item.get("ai_category") or item.get("tags")
@@ -231,7 +226,7 @@ class RecommendationEngine:
         space_candidates.sort(key=lambda x: x[0], reverse=True)
         carousel_1 = [self._transform_item(item) for _, item in space_candidates[:top_n]]
 
-        # 🥈 2段目：マルコフ連鎖による時間遷移予測
+        # 2段目：マルコフ連鎖による時間遷移予測
         transitions = self.markov_matrix.get(current_cat)
         if not transitions:
             return carousel_1, []

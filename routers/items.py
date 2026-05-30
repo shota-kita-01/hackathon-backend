@@ -10,9 +10,8 @@ import uuid
 
 router = APIRouter()
 
-# ===================================================
-# 📦 1. 公式カタログ商品一覧 ＆ 詳細API
-# ===================================================
+
+# 1. 公式カタログ商品一覧 ＆ 詳細API
 
 @router.get("/api/products")
 def get_all_products():
@@ -72,9 +71,7 @@ def get_product_detail(asin: str):
         connection.close()
 
 
-# ===================================================
-# 🛒 2. フリマ商品一覧 ＆ 自由出品API（ハイブリッド統合）
-# ===================================================
+# 2. フリマ商品一覧 ＆ 自由出品API（ハイブリッド統合）
 
 @router.get("/api/items")
 def get_items():
@@ -132,7 +129,7 @@ def get_items():
 
 @router.post("/api/items/check")
 def check_item_safety(item_data: dict):
-    """🛡️ 出品前にGeminiで商品が規約違反でないかリアルタイム審査するエンドポイント（過剰検知防止・防弾パース版）"""
+    """出品前にGeminiで商品が規約違反でないかリアルタイム審査するエンドポイント"""
     try:
         moderation_prompt = f"""あなたは日本の大手フリマアプリの、実用的でバランス感覚に優れたコンプライアンス審査官です。
 以下の出品申請された商品の「商品名」と「商品説明」を精査し、**明らかに規約違反である明確な出品禁止物**（本物の武器、違法薬物、処方箋医薬品、偽ブランド品・スーパーコピー、詐欺・情報商材、成人向けコンテンツなど）に該当する場合のみ、不合格（is_safe: false）としてください。
@@ -146,11 +143,11 @@ def check_item_safety(item_data: dict):
   "reason": "違反と判定した具体的な理由（日本語）。安全な場合は空文字にしてください。"
 }}
 
-【⚠️判定の超重要ルール（過剰検知の防止）】
+【判定の超重要ルール（過剰検知の防止）】
 1. 「早い者勝ち」「奇跡の入荷」「最高の一足」「極上のフィット感」といった、一般的なフリマで日常的に使われるマーケティング的・誇張的な売り文句は、明確な違反品（偽ブランド品や詐欺など）の確証がない限り、すべて「安全（is_safe: true）」と判定してください。表現が少し大げさという理由だけで不合格にしてはなりません。
 2. 完全にアウトな犯罪・違法行為、あるいはプラットフォームの治安を崩壊させるような「真っ黒（ブラック）な商品」のみを狙い撃ちで弾いてください。
 
-【⚠️厳格な掟】
+【厳格な掟】
 プログラムで直接パースするため、前置きや解説テキストは1文字も含めてはなりません。
 必ず最初の「{{」から始めて、最後の「}}」で美しく閉じてください。"""
 
@@ -188,7 +185,7 @@ def check_item_safety(item_data: dict):
 
 @router.post("/api/items")
 def create_item(item_data: dict):
-    """ユーザーが出品画面から入力した内容を、一般出品テーブル（items）へ格納 ＆ 📡潜在空間逆マッチングアラート"""
+    """ユーザーが出品画面から入力した内容を、一般出品テーブル（items）へ格納 ＆ 潜在空間逆マッチングアラート"""
     item_name = item_data.get("name")
     item_description = item_data.get("description")
     raw_image_url = item_data.get("image_url")
@@ -205,7 +202,7 @@ def create_item(item_data: dict):
     image_url = raw_image_url
 
     if is_empty_image:
-        print(f"🎨 [AI画像生成トリガー発動] 商品名: {item_name}")
+        print(f"[AI画像生成トリガー発動] 商品名: {item_name}")
         try:
             # 1. 日本語のコンテキストから英語プロンプトを錬金（これは既存のAI Studio経由のままでOK）
             prompt_alchemy = f"""
@@ -266,18 +263,17 @@ def create_item(item_data: dict):
             
             # 最終的な公開URLで上書き
             image_url = f"https://storage.googleapis.com/{bucket_name}/{filename}"
-            print(f"   ➔ 🎉 AI画像生成・アップロード成功: {image_url}")
+            print(f"   ➔ AI画像生成・アップロード成功: {image_url}")
             
         except Exception as ai_img_err:
             # 💡 【重要】ハッカソンのCloud Runログ（Log Viewer）で何のエラーか一発で特定するためにログを強化！
-            print(f"🔥 🚨 【AI画像生成コアエラー】内部で致命的なクラッシュが発生しました: {str(ai_img_err)}")
+            print(f"【AI画像生成コアエラー】内部で致命的なクラッシュが発生しました: {str(ai_img_err)}")
             import traceback
             traceback.print_exc()  # エラーの発生源（スタックトレース）をログに全吐き出しする
             
             # 安全弁として既存のダミー画像をセット
             image_url = "https://storage.googleapis.com/term9-shota-kita-images/products/generated_1.png"
 
-    # 🧠 【潜在空間同期】ここからは完全オリジナルの多次元ベクトル化処理へ直結
     structured_text = f"""
     Product Characteristics:
     - Title: {item_name}
@@ -311,14 +307,13 @@ def create_item(item_data: dict):
             min_acceptable_price = int(min_price) if min_price else current_price
             seller_stance = item_data.get("seller_stance", "急いでいない")
 
-            # 💡 引数の指定を先ほど確定した変数 `image_url` に変更
             cursor.execute(sql, (
                 item_name,
                 item_description,
                 current_price,
                 min_acceptable_price,
                 seller_stance,
-                image_url,  # 👈 差し替え完了！
+                image_url,  
                 item_data.get("seller_id"),
                 item_data.get("tags", "一般出品"),
                 item_data.get("item_condition", "目立った傷や汚れなし"),
@@ -349,7 +344,7 @@ def create_item(item_data: dict):
                         """, (wish["user_id"], "✨ 脳内イメージにマッチする商品が入荷しました！", 
                               f"入荷待ち登録「{wish['keywords']}」に {match_percent}% 一致する「{item_data.get('name')}」が出品されました！", new_item_hybrid_id))
                 except Exception as wish_err:
-                    print(f"⚠️ マッチング演算スキップ: {wish_err}")
+                    print(f"マッチング演算スキップ: {wish_err}")
 
             connection.commit()
             return {"status": "success", "message": "商品が出品されました！"}
@@ -386,9 +381,8 @@ def get_user_products(user_id: int):
         connection.close()
 
 
-# ===================================================
-# 🔍 検索キーワード履歴 記録 ＆ 取得API（変更なし）
-# ===================================================
+
+# 検索キーワード履歴 記録 ＆ 取得API（変更なし）
 
 @router.post("/api/users/{user_id}/keywords")
 def record_search_keyword(user_id: int, data: dict):
@@ -422,9 +416,8 @@ def get_search_keywords(user_id: int):
         connection.close()
 
 
-# ===================================================
-# 🛍️ 3. 購入・いいね・履歴API
-# ===================================================
+
+#  購入・いいね・履歴API
 
 @router.post("/api/items/{item_id}/purchase")
 def purchase_item(item_id: int, buyer_data: dict):
@@ -453,23 +446,23 @@ def purchase_item(item_id: int, buyer_data: dict):
                 item_name = product["name"]
                 cursor.execute("UPDATE products SET status = 'sold_out' WHERE id = %s", (item_id,))
             
-            # ① 既存の購入ログ（後方互換性維持）
+            # ① 既存の購入ログ
             cursor.execute("SET FOREIGN_KEY_CHECKS=0;")
             cursor.execute("INSERT INTO purchases (item_id, buyer_id) VALUES (%s, %s)", (item_id, buyer_id))
             
-            # ② 🚀 取引進行管理（transactions）レコードの自動生成
+            # ② 取引進行管理レコードの自動生成
             tx_sql = "INSERT INTO transactions (item_id, product_id, buyer_id, seller_id, status) VALUES (%s, %s, %s, %s, 'shipping_pending')"
             cursor.execute(tx_sql, (db_item_id, product_id, buyer_id, seller_id))
             tx_id = cursor.lastrowid
             
-            # ③ 🔔 出品条件に応じた通知 ＆ メッセージの自動分岐処理
+            # ③ 出品条件に応じた通知 ＆ メッセージの自動分岐処理
             if seller_id:
-                # 👥 一般出品：実在する出品者へ購入通知を送る
+                # 一般出品：実在する出品者へ購入通知を送る
                 cursor.execute("""
                     INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
                 """, (seller_id, "🎉 商品が購入されました！", f"出品した「{item_name}」が購入されました。発送手続きを進めてください。", item_id))
             else:
-                # 🤖 公式カタログ品：やり取り先がいないため、システムBot(sender_id=0)から安心アナウンスを即時注入！
+                # 公式カタログ品：やり取り先がいないため、システムBot(sender_id=0)から安心アナウンス
                 bot_msg = "🤖 ご購入ありがとうございます！本商品は公式カタログ品のため、出品者とのやり取りは不要です。倉庫より自動発送されますので、到着まで今しばらくお待ちください。"
                 cursor.execute("""
                     INSERT INTO transaction_messages (transaction_id, sender_id, message) 
@@ -627,9 +620,7 @@ def get_user_purchases(user_id: int):
         connection.close()
 
 
-# ===================================================
-# 🧠 4. AI商品説明自動生成 ＆ 価格査定
-# ===================================================
+# 4. AI商品説明自動生成 ＆ 価格査定
 
 @router.post("/api/ai/suggest-description")
 def suggest_description(data: dict):
@@ -640,7 +631,7 @@ def suggest_description(data: dict):
         prompt = f"""あなたは日本の大人気フリマアプリ（メルカリなど）でクリーンに月商100万円を売り上げる、購入者から圧倒的信頼を得ている伝説のトップセラーです。
 ユーザーが入力した商品名をもとに、購入者の物欲を刺激しつつも、規約違反にならない誠実で「そのままコピペして使える完成された商品説明文」を1つだけ作成してください。
 
-【⚠️絶対に守るべき鉄の掟】
+【絶対に守るべき鉄の掟】
 1. 「〇〇の説明文ですね！」などの前置き、挨拶、終わりの会話文は、1文字とも出力しないでください。
 2. 「パターン1」「パターン2」などの複数提案や、キャッチコピーの箇条書きは絶対に禁止です。最初から最高の一着としての文章を1パターンだけ作成してください。
 3. 出力するテキストは、フリマの「商品説明欄にそのまま貼り付けられる本文」のみとしてください。
@@ -676,7 +667,7 @@ def suggest_price(data: dict):
         prompt = f"""あなたは日本のフリマ市場（メルカリやヤフオクなど）の相場・価格決定メカニズムを完璧にハックしている超一流のAI査定士です。
 以下の4つの情報をもとに、現在の日本のリアルなセカンドハンド市場で「最も買い手がつきやすく、かつ損をしない適正な販売価格（日本円）」を査定してください。
 
-【⚠️ 査定における数理的重み付けのルール】
+【査定における数理的重み付けのルール】
 1. 「商品の状態」が『傷や汚れあり』や『全体的に状態が悪い』の場合は、ジャンルごとの標準相場から30%〜70%大幅に減額した、現実的に売れる価格にしてください。
 2. 「商品の状態」が『新品・未使用』『未使用に近い』の場合でも、中古であることを考慮して、高すぎる値段をつけないようにしてください。
 3. 出力は査定した金額の「数字（整数）」のみとし、「円」や「¥」、カンマ（,）、解説テキストは絶対に1文字も含めないでください。
@@ -703,9 +694,8 @@ def suggest_price(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
     
 
-# ===================================================
-# 📦 5. 取引画面・メッセージ・通知・ウィッシュリスト用 新設API
-# ===================================================
+
+# 5. 取引画面・メッセージ・通知・ウィッシュリスト用 新設API
 
 @router.get("/api/transactions/{transaction_id}")
 def get_transaction_detail(transaction_id: int):
@@ -843,7 +833,7 @@ def mark_notification_as_read(notification_id: int):
 
 @router.get("/api/users/{user_id}/transactions")
 def get_user_active_transactions(user_id: int):
-    """【新設】ユーザーが購入、または出品している『進行中（未完了）』の取引一覧を全件取得"""
+    """ユーザーが購入、または出品している『進行中（未完了）』の取引一覧を全件取得"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -891,7 +881,7 @@ def get_user_completed_transactions(user_id: int):
 
 @router.get("/api/users/{user_id}/wishlists")
 def get_user_wishlists(user_id: int):
-    """【新設】ユーザーが登録した入荷待ち（ウィッシュリスト）キーワードの一覧を取得"""
+    """ユーザーが登録した入荷待ち（ウィッシュリスト）キーワードの一覧を取得"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -903,7 +893,7 @@ def get_user_wishlists(user_id: int):
 
 @router.delete("/api/wishlists/{wishlist_id}")
 def delete_wishlist(wishlist_id: int):
-    """【新設】不要になった入荷待ち登録を解除（削除）するAPI"""
+    """不要になった入荷待ち登録を解除（削除）するAPI"""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -914,13 +904,10 @@ def delete_wishlist(wishlist_id: int):
         connection.close()
 
 
-# ===================================================
-# 🥊 6. 【新設】AI代理交渉エージェント（利害調停数理インフラ）
-# ===================================================
-
+# 6. AI代理交渉エージェント（利害調停数理インフラ）
 @router.post("/api/items/{item_id}/negotiate")
 def negotiate_item_price(item_id: int, data: dict):
-    """【新設】購入者の希望価格と熱意文を、出品者の隠しデッドラインと照らし合わせてGeminiが3分岐調停するAPI"""
+    """購入者の希望価格と熱意文を、出品者の隠しデッドラインと照らし合わせてGeminiが3分岐調停するAPI"""
     if item_id < 100000:
         raise HTTPException(status_code=400, detail="公式カタログ商品は固定価格のため、価格交渉の対象外です。")
         
@@ -947,7 +934,7 @@ def negotiate_item_price(item_id: int, data: dict):
             seller_id = item["seller_id"]
             item_name = item["name"]
             
-            # 🧠 厳格な判定ルールを焼き付けたプロンプトをGeminiへ流し込む
+            # 厳格な判定ルールを焼き付けたプロンプトをGeminiへ流し込む
             prompt = f"""あなたは一流のフリマアプリの仲裁AI（調停エージェント）です。
 購入者から届いた「希望価格」と「熱意文」を、出品者の「販売条件」と照らし合わせて、経済学的かつ心理的に中立な立場から以下の3つの結論（status）のいずれかを下してください。
 
@@ -1010,7 +997,7 @@ def negotiate_item_price(item_id: int, data: dict):
                 if seller_id:
                     cursor.execute("""
                         INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
-                    """, (seller_id, "🤝 AI代理交渉により商品が即時売却されました！", 
+                    """, (seller_id, "AI代理交渉により商品が即時売却されました！", 
                           f"出品した「{item_name}」が、AI調停エージェントの仲裁により {settlement_price}円 で合意に達し、自動決済されました。取引画面を確認してください。", item_id))
                 
                 cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
@@ -1031,7 +1018,7 @@ def negotiate_item_price(item_id: int, data: dict):
 
 @router.post("/api/items/{item_id}/negotiate/confirm")
 def confirm_counter_price(item_id: int, data: dict):
-    """【新設】AIが提示した妥協案（COUNTER）を購入者が「その価格で承諾する」と決断した瞬間の最終決済API"""
+    """AIが提示した妥協案を購入者が「その価格で承諾する」と決断した瞬間の最終決済API"""
     try:
         connection = get_db_connection()
         with connection.cursor() as cursor:
@@ -1055,7 +1042,7 @@ def confirm_counter_price(item_id: int, data: dict):
             if item["seller_id"]:
                 cursor.execute("""
                     INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
-                """, (item["seller_id"], "🤝 AI妥協案により価格交渉が成立しました！", 
+                """, (item["seller_id"], "AI妥協案により価格交渉が成立しました！", 
                       f"出品した「{item['name']}」が、AI提示の妥協案（{settlement_price}円）で購入者により承諾され、取引が成立しました。", item_id))
                 
             cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
@@ -1073,23 +1060,20 @@ def update_item_detail(item_id: int, item_data: dict):
     if item_id < 100000:
         raise HTTPException(status_code=400, detail="公式カタログ商品は編集できません。")
         
-    raw_id = item_id - 100000  # 💡 仮想ID空間から本物のDBのプライマリキーへ逆コンバート
+    raw_id = item_id - 100000 
 
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 🛑 【防弾ガード1】対象の商品が存在するか、精度ステータスが何かをハント
             cursor.execute("SELECT status FROM items WHERE id = %s", (raw_id,))
             item = cursor.fetchone()
             
             if not item:
                 raise HTTPException(status_code=404, detail="対象の商品が存在しません。")
             
-            # 🛑 【防弾ガード2】販売中（on_sale）以外のステータス（取引中や売り切れなど）なら即座に門前払い
             if item["status"] != "on_sale":
                 raise HTTPException(status_code=400, detail="販売中以外の商品は、安全上の理由から内容の訂正ができません。")
 
-            # 🧠 【AI空間同期】ステータスチェックを通過したら、Geminiの潜在空間ベクトル（Embedding）を再計算
             structured_text = f"""
             Product Characteristics:
             - Title: {item_data.get("name")}
@@ -1105,7 +1089,7 @@ def update_item_detail(item_id: int, item_data: dict):
                 embedding_vector = embed_res.embeddings[0].values
                 embedding_json = json.dumps(embedding_vector)
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"【AI空間再配置エラー】ベクトルの更新に失敗しました: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"更新に失敗しました: {str(e)}")
 
             # 🛠️ すべてのメタデータとAI数理調停パラメータを一括UPDATE
             sql = """
