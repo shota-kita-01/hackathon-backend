@@ -181,7 +181,7 @@ class RecommendationEngine:
             scored_items.append(product_data)
             
         scored_items.sort(key=lambda x: x["score"], reverse=True)
-        return query_vector, scored_items[:top_n]
+        return scored_items[:top_n]
 
     # 詳細画面用：確率的時間遷移 ＆ 空間的類似
     def get_recommendations(self, target_asin, top_n=3):
