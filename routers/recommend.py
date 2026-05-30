@@ -4,13 +4,12 @@ from db import get_db_connection
 
 router = APIRouter()
 
-# ===================================================
-# 🧠 1. 検索画面用：AI Mood ベクトル検索 ＆ 絞り込み（変更なし）
-# ===================================================
+# 検索画面用：AI Mood ベクトル検索 ＆ 絞り込み
+
 @router.post("/api/recommend")
 def get_mood_recommendations(data: RecommendRequest, request: Request):
     """
-    フロントの『Ask AI ✨』から mood_text と filter_status を受け取り、
+    フロントの『Ask AI』から mood_text と filter_status を受け取り、
     ベクトル検索した上で、ステータス絞り込みを行って返す窓口
     """
     if not data.mood_text:
@@ -34,7 +33,7 @@ def get_mood_recommendations(data: RecommendRequest, request: Request):
         return recommended_products[:500]
 
     except Exception as e:
-        print(f"🔥 Mood Recommend Error: {e}")
+        print(f"Mood Recommend Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -73,7 +72,7 @@ def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
         }
         
     except Exception as e:
-        print(f"🔥 Recommend API Critical Error: {e}")
+        print(f"Recommend API Critical Error: {e}")
         return {
             "target_asin": asin,
             "carousel_space_similarity": {"title": "この商品と似ているアイテム（空間的類似）", "items": []},
@@ -115,9 +114,8 @@ def get_home_dashboard(user_id: int):
             market_cat_row = cursor.fetchone()
             market_top_cat = market_cat_row['ai_category'] if market_cat_row else "Electronics"
 
-            # 🛠️ 指定カテゴリーから、公式と一般出品を混ぜたハイブリッドプールからランダムに取得するサブクエリ
+            # 指定カテゴリーから、公式と一般出品を混ぜたハイブリッドプールからランダムに取得するサブクエリ
             def get_items_by_cat(category, limit=5):
-                # 💡 【改修①】内側の products 側を COALESCE(ai_image_url, image_url) に換装
                 sql = """
                     SELECT id, asin, name, price, tags, description, image_url, status, item_condition, seller_name, shipping_days
                     FROM (
@@ -131,11 +129,9 @@ def get_home_dashboard(user_id: int):
                 cursor.execute(sql, (category, limit))
                 return cursor.fetchall()
 
-            # 🥇 Tier 1: あなたへのおすすめ (Top 5)
             if user_cats:
                 top_3_cats = [c['ai_category'] for c in user_cats[:3]]
                 format_strings = ','.join(['%s'] * len(top_3_cats))
-                # 💡 【改修②】内側の products 側を COALESCE(ai_image_url, image_url) に換装
                 sql = f"""
                     SELECT id, asin, name, price, tags, description, image_url, status, item_condition, seller_name, shipping_days
                     FROM (
@@ -149,7 +145,6 @@ def get_home_dashboard(user_id: int):
                 cursor.execute(sql, tuple(top_3_cats))
                 personalized_top5 = cursor.fetchall()
             else:
-                # 💡 【改修③】内側の products 側を COALESCE(ai_image_url, image_url) に換装
                 sql = """
                     SELECT id, asin, name, price, tags, description, image_url, status, item_condition, seller_name, shipping_days
                     FROM (
@@ -162,23 +157,23 @@ def get_home_dashboard(user_id: int):
                 cursor.execute(sql)
                 personalized_top5 = cursor.fetchall()
 
-            # 🥈 Tier 2: あなたに人気のカテゴリー
+            # あなたに人気のカテゴリー
             if user_cats:
                 user_top_cat = user_cats[0]['ai_category']
                 user_top_cat_items = get_items_by_cat(user_top_cat, 5)
-                user_favorite_title = f"👤 あなたに人気のカテゴリー ({user_top_cat})"
+                user_favorite_title = f"あなたに人気のカテゴリー ({user_top_cat})"
             else:
                 user_top_cat_items = []
-                user_favorite_title = "👤 あなたに人気のカテゴリー"
+                user_favorite_title = "あなたに人気のカテゴリー"
 
-            # 🥉 Tier 3: 市場全体で人気のカテゴリー
+            # 市場全体で人気のカテゴリー
             market_top_cat_items = get_items_by_cat(market_top_cat, 5)
 
             return {
                 "status": "success",
                 "data": {
                     "personalized": {
-                        "title": "✨ あなたへのおすすめ",
+                        "title": "あなたへのおすすめ",
                         "items": personalized_top5
                     },
                     "user_favorite": {
@@ -186,7 +181,7 @@ def get_home_dashboard(user_id: int):
                         "items": user_top_cat_items
                     },
                     "market_favorite": {
-                        "title": f"🔥 市場で人気のカテゴリー ({market_top_cat})",
+                        "title": f"市場で人気のカテゴリー ({market_top_cat})",
                         "items": market_top_cat_items
                     }
                 }
