@@ -8,10 +8,6 @@ router = APIRouter()
 
 @router.post("/api/recommend")
 def get_mood_recommendations(data: RecommendRequest, request: Request):
-    """
-    フロントの『Ask AI』から mood_text と filter_status を受け取り、
-    ベクトル検索した上で、ステータス絞り込みを行って返す窓口
-    """
     if not data.mood_text:
         raise HTTPException(status_code=400, detail="mood_textが必要です")
         
@@ -81,14 +77,14 @@ def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
 
 
 # ===================================================
-# 🏠 3. ホーム画面用：3段パーソナライズ統合エンドポイント（✨ココをハック！）
+# 🏠 3. ホーム画面用：3段パーソナライズ統合エンドポイント
 # ===================================================
 @router.get("/api/home/{user_id}")
 def get_home_dashboard(user_id: int):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            # 📊 分析1: ユーザーの行動（閲覧・いいね）からトップカテゴリーを抽出
+            # 分析1: ユーザーの行動（閲覧・いいね）からトップカテゴリーを抽出
             cursor.execute("""
                 SELECT p.ai_category, COUNT(*) as weight
                 FROM (
@@ -102,7 +98,7 @@ def get_home_dashboard(user_id: int):
             """, (user_id, user_id))
             user_cats = cursor.fetchall()
             
-            # 📊 分析2: 市場全体（全ユーザー）の閲覧履歴からトップカテゴリーを抽出
+            # 分析2: 市場全体（全ユーザー）の閲覧履歴からトップカテゴリーを抽出
             cursor.execute("""
                 SELECT p.ai_category, COUNT(*) as weight
                 FROM item_views v

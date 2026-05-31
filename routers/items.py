@@ -735,12 +735,12 @@ def progress_transaction_status(transaction_id: int, data: dict):
                 if current_action_user_id != tx["seller_id"] and tx["seller_id"] is not None:
                     raise HTTPException(status_code=403, detail="出品者以外は発送通知を実行できません")
                 next_status, notif_target_user_id = "shipped", tx["buyer_id"]
-                notif_title, notif_message = "🚚 商品が発送されました！", "商品が発送されました。到着後、中身を確認して受取評価をしてください。"
+                notif_title, notif_message = "商品が発送されました！", "商品が発送されました。到着後、中身を確認して受取評価をしてください。"
             elif tx["status"] == "shipped":
                 if current_action_user_id != tx["buyer_id"]:
                     raise HTTPException(status_code=403, detail="購入者以外は受取評価を完了できません")
                 next_status, notif_target_user_id = "completed", tx["seller_id"]
-                notif_title, notif_message = "🏁 取引がすべて完了しました！", "購入者が受取評価を完了しました。売上金が反映されます。"
+                notif_title, notif_message = "取引がすべて完了しました！", "購入者が受取評価を完了しました。売上金が反映されます。"
 
             cursor.execute("UPDATE transactions SET status = %s WHERE id = %s", (next_status, transaction_id))
             
