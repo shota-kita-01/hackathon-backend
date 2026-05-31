@@ -460,7 +460,7 @@ def purchase_item(item_id: int, buyer_data: dict):
                 # 一般出品：実在する出品者へ購入通知を送る
                 cursor.execute("""
                     INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
-                """, (seller_id, "🎉 商品が購入されました！", f"出品した「{item_name}」が購入されました。発送手続きを進めてください。", item_id))
+                """, (seller_id, "商品が購入されました！", f"出品した「{item_name}」が購入されました。発送手続きを進めてください。", item_id))
             else:
                 # 公式カタログ品：やり取り先がいないため、システムBot(sender_id=0)から安心アナウンス
                 bot_msg = "🤖 ご購入ありがとうございます！本商品は公式カタログ品のため、出品者とのやり取りは不要です。倉庫より自動発送されますので、到着まで今しばらくお待ちください。"
