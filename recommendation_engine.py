@@ -40,7 +40,6 @@ class RecommendationEngine:
         print(f"   ➔ ロード完了: 公式商品数 {len(self.static_products)} 件 / マルコフ行列 22x22")
 
     def _get_all_items(self):
-        """【✨ここをハック！】公式データの最新ステータスとAI画像をDBから完全同期し、全アイテムプールを返す"""
         from db import get_db_connection
         
         connection = get_db_connection()
@@ -111,7 +110,6 @@ class RecommendationEngine:
         return user_items
 
     def _transform_item(self, item, score=None):
-        """公式データ（JSON）と一般ユーザーデータ（DB）の構造の差異を吸収し、フロントエンドに統一整形"""
         data = {
             "id": item["id"], 
             "asin": item.get("asin"), 
