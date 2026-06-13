@@ -13,7 +13,7 @@ class RecommendationEngine:
         print("レコメンドエンジンを初期化中...")
         
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        embeddings_json_path = os.path.join(BASE_DIR, "data", "items_with_embeddings_all_2200_ja.json")
+        embeddings_json_path = os.path.join(BASE_DIR, "data", "items_with_embeddings_all_2200.json")
         fallback_json_path = os.path.join(BASE_DIR, "data", "items_for_db.json")
         
         try:
@@ -137,7 +137,7 @@ class RecommendationEngine:
             response = client.models.embed_content(
                 model="gemini-embedding-2",
                 contents=mood_text,
-                config=types.EmbedContentConfig(output_dimensionality=768,task_type="RETRIEVAL_QUERY")
+                config=types.EmbedContentConfig(output_dimensionality=768)
             )
             query_vector = response.embeddings[0].values
             print("gemini-embedding-2 での特権ベクトル化に成功しました！")
