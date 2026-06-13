@@ -274,23 +274,24 @@ def create_item(item_data: dict):
             # 安全弁として既存のダミー画像をセット
             image_url = "https://storage.googleapis.com/term9-shota-kita-images/products/generated_1.png"
 
-    structured_text = f"""
-    Product Characteristics:
-    - Title: {item_name}
-    - Category: {item_data.get("tags")}
-    - Core Context: {item_description}
-    """
+# 💡 英語テンプレート（定数ノイズ）を完全撤廃し、純粋な日本語結合テキストにする
+    structured_text = f"{item_name} {item_data.get('tags', '一般出品')} {item_description}"
+    
     try:
         embed_res = client.models.embed_content(
             model="gemini-embedding-2",
             contents=structured_text,
-            config=types.EmbedContentConfig(output_dimensionality=768)
+            config=types.EmbedContentConfig(
+                output_dimensionality=768,
+                task_type="RETRIEVAL_DOCUMENT"  # 💡 保存用ドキュメント空間に固定
+            )
         )
         embedding_vector = embed_res.embeddings[0].values
         embedding_json = json.dumps(embedding_vector)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"【AI空間配置エラー】ベクトルの生成に失敗しました: {str(e)}")
-
+    
+    
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
@@ -1073,18 +1074,17 @@ def update_item_detail(item_id: int, item_data: dict):
             
             if item["status"] != "on_sale":
                 raise HTTPException(status_code=400, detail="販売中以外の商品は、安全上の理由から内容の訂正ができません。")
-
-            structured_text = f"""
-            Product Characteristics:
-            - Title: {item_data.get("name")}
-            - Category: {item_data.get("tags")}
-            - Core Context: {item_data.get("description")}
-            """
+            
+            # 💡 【数理調停】テンプレートノイズを完全撤廃し、純粋な日本語結合テキストにする
+            structured_text = f"{item_data.get('name')} {item_data.get('tags', '一般出品')} {item_data.get('description')}"
             try:
                 embed_res = client.models.embed_content(
                     model="gemini-embedding-2",
                     contents=structured_text,
-                    config=types.EmbedContentConfig(output_dimensionality=768)
+                    config=types.EmbedContentConfig(
+                        output_dimensionality=768,
+                        task_type="RETRIEVAL_DOCUMENT"  # 💡 保存用ドキュメント空間に固定してアライメントを同期
+                    )
                 )
                 embedding_vector = embed_res.embeddings[0].values
                 embedding_json = json.dumps(embedding_vector)
