@@ -5,9 +5,8 @@ import pymysql
 from google import genai  
 
 # ==========================================
-# ⚙️ 設定 ＆ .env自動ロードセクション
+# 設定
 # ==========================================
-# 💡 これを追加！db.pyを単体起動したときも、.envの設定を100%読み込みます
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(BASE_DIR, ".env")
 
@@ -19,7 +18,7 @@ if os.path.exists(env_path):
                 key, val = line.split("=", 1)
                 os.environ[key.strip()] = val.strip().strip('"').strip("'")
 
-# 🧠 Geminiクライアントの初期化
+# Geminiクライアントの初期化
 client = genai.Client(http_options={'api_version': 'v1'})
 
 # データベース接続関数
@@ -51,7 +50,7 @@ def get_db_connection():
         )
 
 # ==========================================
-# 🚀 成果物JSONをDBへUPSERT（追記・更新）する関数
+# 成果物JSONをDBへUPSERT
 # ==========================================
 def import_hybrid_items(json_file_path):
     """
@@ -59,14 +58,14 @@ def import_hybrid_items(json_file_path):
     重複があれば上書き、なければ新規挿入（UPSERT）します。
     """
     if not os.path.exists(json_file_path):
-        print(f"🚨 指定されたファイルが見つかりません: {json_file_path}")
+        print(f"指定されたファイルが見つかりません: {json_file_path}")
         return
 
     print(f"📖 {json_file_path} をロード中...")
     with open(json_file_path, "r", encoding="utf-8") as f:
         items = json.load(f)
 
-    print(f"🔌 クラウドデータベース（Cloud SQL）に接続中...")
+    print(f"クラウドデータベース（Cloud SQL）に接続中...")
     connection = get_db_connection()
     
     # MySQLの標準的なUPSERT構文
@@ -85,7 +84,7 @@ def import_hybrid_items(json_file_path):
     success_count = 0
     try:
         with connection.cursor() as cursor:
-            print("🧹 古いカタログデータの残党を完全にクレンジング中...")
+            print("古いカタログデータの残党を完全にクレンジング中...")
             cursor.execute("SET FOREIGN_KEY_CHECKS = 0;")
             cursor.execute("TRUNCATE TABLE products;")
             cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
@@ -108,11 +107,11 @@ def import_hybrid_items(json_file_path):
                 success_count += 1
                 
         connection.commit()
-        print(f"✨ 成功：{success_count} 件の商品データを Cloud SQL へインポート/更新しました！")
+        print(f"成功：{success_count} 件の商品データを Cloud SQL へインポートしました！")
         
     except Exception as e:
         connection.rollback()
-        print(f"🚨 データベース書き込み中にエラーが発生しました。ロールバックします: {e}")
+        print(f"データベース書き込み中にエラーが発生しました。ロールバックします: {e}")
     finally:
         connection.close()
 
@@ -121,4 +120,4 @@ if __name__ == "__main__":
         target_file = sys.argv[1]
         import_hybrid_items(target_file)
     else:
-        print("💡 使い方: python3 db.py [インポートしたいJSONファイル名]")
+        print("使い方: python3 db.py [インポートしたいJSONファイル名]")

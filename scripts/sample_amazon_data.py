@@ -3,8 +3,7 @@ import random
 import pandas as pd
 from datasets import load_dataset
 
-# 💡 【超時空防弾ハック】Hugging Face内部のバグった型キャスト処理を完全にバイパス！
-# これにより、余計なカラムの型衝突エラーを100%回避し、生データのまま超高速にストリーミングします。
+# Hugging Face内部のバグった型キャスト処理を完全にバイパス！
 import datasets.table
 import datasets.iterable_dataset
 bypass_lambda = lambda table, features: table
@@ -23,7 +22,7 @@ CATEGORIES = [
 SAMPLE_SIZE_META = 100
 SAMPLE_SIZE_REVIEW = 500 
 
-# 🎨 22カテゴリー別・高品質画像URLプール（各3枚ずつ厳選）
+# 22カテゴリー別・高品質画像URLプール（各3枚ずつ厳選）
 CATEGORY_IMAGE_POOLS = {
     "All_Beauty": [
         "https://images.unsplash.com/photo-1596462502278-27bfdc403348?w=600",
@@ -141,17 +140,16 @@ DEFAULT_IMAGES = [
     "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=600"
 ]
 
-print(f"⏳ 【関心の分離】全 {len(CATEGORIES)} ジャンルから、DB用と行動ログ用に分けてサンプリングを開始します...")
+print(f"全 {len(CATEGORIES)} ジャンルから、DB用と行動ログ用に分けてサンプリングを開始...")
 
 db_items = []         
 sampled_reviews = []  
 
 for i, cat in enumerate(CATEGORIES):
-    print(f"📦 [{i+1}/{len(CATEGORIES)}] カテゴリ [{cat}] を処理中...")
+    print(f"[{i+1}/{len(CATEGORIES)}] カテゴリ [{cat}] を処理中...")
     
-    # ── 1. メタデータ（商品情報）のストリーミング ──
+    # 1. 商品情報のストリーミング
     try:
-        # 💡 trust_remote_code=True を安全に復活
         meta_stream = load_dataset(
             "McAuley-Lab/Amazon-Reviews-2023", 
             f"raw_meta_{cat}", 
@@ -192,9 +190,9 @@ for i, cat in enumerate(CATEGORIES):
                 
             count += 1
     except Exception as e:
-        print(f"   ⚠️ メタデータ取得エラー [{cat}]: {e}")
+        print(f"   データ取得エラー [{cat}]: {e}")
 
-    # ── 2. レビューログ（行動ログ）のストリーミング ──
+    # 2. 行動ログのストリーミング ──
     try:
         review_stream = load_dataset(
             "McAuley-Lab/Amazon-Reviews-2023", 
@@ -218,9 +216,9 @@ for i, cat in enumerate(CATEGORIES):
             })
             count += 1
     except Exception as e:
-        print(f"   ⚠️ レビューログ取得エラー [{cat}]: {e}")
+        print(f"   レビューログ取得エラー [{cat}]: {e}")
 
-# ── 3. それぞれのファイルに永続化 ──
+# 3. それぞれのファイルに永続化
 with open("items_for_db.json", "w", encoding="utf-8") as f:
     json.dump(db_items, f, ensure_ascii=False, indent=2)
 
@@ -228,7 +226,6 @@ df_reviews = pd.DataFrame(sampled_reviews)
 df_reviews.to_csv("amazon_review_samples.csv", index=False, encoding="utf-8")
 
 print("\n" + "="*50)
-print("✨ 【Step 1 データの完全分離 ＆ ビジュアル調和に成功！】")
-print(f"➔ ① DB・画面表示用データ : {len(db_items)} 件 (items_for_db.json)")
-print(f"➔ ② 市場行動ログ (CSV)   : {len(df_reviews)} 件 (amazon_review_samples.csv)")
+print(f"➔ DB・画面表示用データ : {len(db_items)} 件 (items_for_db.json)")
+print(f"➔ 市場行動ログ (CSV)   : {len(df_reviews)} 件 (amazon_review_samples.csv)")
 print("="*50)

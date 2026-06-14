@@ -4,7 +4,7 @@ from db import get_db_connection
 
 router = APIRouter()
 
-# 検索画面用：AI Mood ベクトル検索 ＆ 絞り込み
+# 検索画面用
 
 @router.post("/api/recommend")
 def get_mood_recommendations(data: RecommendRequest, request: Request):
@@ -33,9 +33,7 @@ def get_mood_recommendations(data: RecommendRequest, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ===================================================
-# 🛰️ 2. 詳細画面用：確率的時間遷移 ＆ 空間的類似（変更なし）
-# ===================================================
+# 2. 詳細画面用：確率的時間遷移 ＆ 空間的類似（変更なし）
 @router.get("/api/recommendations/{asin}")
 def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
     """詳細画面のカルーセル用データ（公式ASIN・一般出品IDの双方を安全にエンジンへ中継）"""
@@ -51,18 +49,18 @@ def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
         if carousel_1 is None or carousel_2 is None:
             return {
                 "target_asin": asin,
-                "carousel_space_similarity": {"title": "この商品と似ているアイテム（空間的類似）", "items": []},
-                "carousel_time_transition": {"title": "次にこれを買い回る人が多いジャンル（確率的時間遷移）", "items": []}
+                "carousel_space_similarity": {"title": "この商品と似ているアイテム）", "items": []},
+                "carousel_time_transition": {"title": "次にこれを買い回る人が多いジャンル", "items": []}
             }
             
         return {
             "target_asin": asin,
             "carousel_space_similarity": {
-                "title": "この商品と似ているアイテム（空間的類似）",
+                "title": "この商品と似ているアイテム",
                 "items": carousel_1
             },
             "carousel_time_transition": {
-                "title": "次にこれを買い回る人が多いジャンル（確率的時間遷移）",
+                "title": "次にこれを買い回る人が多いジャンル",
                 "items": carousel_2
             }
         }
@@ -71,14 +69,12 @@ def get_hybrid_recommendations(asin: str, request: Request, top_n: int = 4):
         print(f"Recommend API Critical Error: {e}")
         return {
             "target_asin": asin,
-            "carousel_space_similarity": {"title": "この商品と似ているアイテム（空間的類似）", "items": []},
-            "carousel_time_transition": {"title": "次にこれを買い回る人が多いジャンル（確率的時間遷移）", "items": []}
+            "carousel_space_similarity": {"title": "この商品と似ているアイテム", "items": []},
+            "carousel_time_transition": {"title": "次にこれを買い回る人が多いジャンル", "items": []}
         }
 
 
-# ===================================================
-# 🏠 3. ホーム画面用：3段パーソナライズ統合エンドポイント
-# ===================================================
+# 3. ホーム画面用：3段パーソナライズ統合エンドポイント
 @router.get("/api/home/{user_id}")
 def get_home_dashboard(user_id: int):
     connection = get_db_connection()
