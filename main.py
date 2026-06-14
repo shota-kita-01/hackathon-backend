@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import recommend, items, auth, admin
+from routers import recommend, items, auth
 from recommendation_engine import RecommendationEngine
 
 # アプリ起動・終了時のライフサイクル管理
@@ -33,7 +33,6 @@ app.add_middleware(
 app.include_router(recommend.router)
 app.include_router(items.router)
 app.include_router(auth.router)
-app.include_router(admin.router)
 
 @app.get("/")
 def read_root():
