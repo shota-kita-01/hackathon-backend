@@ -8,20 +8,19 @@ from recommendation_engine import RecommendationEngine
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ① サーバーが「いの一番」に起動した瞬間、24万行のベクトルデータをメモリ（RAM）に一度だけ展開
     print("アプリケーションを起動中: レコメンドエンジンを常駐メモリに展開します...")
     app.state.recommend_engine = RecommendationEngine()
     
     yield 
     
-    # ② サーバーがシャットダウンする時の処理（必要なら）
+    # ② サーバーがシャットダウンする時の処理
     print("アプリケーションを停止中...")
     app.state.recommend_engine = None
 
 # lifespanをアプリ本体に登録
 app = FastAPI(title="Hackathon Hybrid Recommendation API", lifespan=lifespan)
 
-# CORSの完全開通（React/Next.jsとの通信を許可）
+# CORSの完全開通
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
