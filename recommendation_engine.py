@@ -175,6 +175,10 @@ class RecommendationEngine:
         for item in all_items:
             v_key = "embedding" if "embedding" in item else ("embeddings" if "embeddings" in item else "vector")
             sim = cos_sim(query_vector, item[v_key])
+
+            if item.get("asin") is not None or item.get("id", 0) < 100000:
+                sim = min(sim * 1.15, 1.0)
+            
             product_data = self._transform_item(item, score=sim)
             scored_items.append(product_data)
             
