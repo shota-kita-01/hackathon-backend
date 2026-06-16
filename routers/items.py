@@ -339,7 +339,7 @@ def create_item(item_data: dict):
                         match_percent = round(sim * 100, 1)
                         cursor.execute("""
                             INSERT INTO notifications (user_id, title, message, item_id) VALUES (%s, %s, %s, %s)
-                        """, (wish["user_id"], "欲しいイメージにマッチする商品が入荷しました", 
+                        """, (wish["user_id"], "入荷待ちリストの商品が出品されました！", 
                               f"入荷待ち登録「{wish['keywords']}」に {match_percent}% 一致する「{item_data.get('name')}」が出品されました！", new_item_hybrid_id))
                 except Exception as wish_err:
                     print(f"マッチング演算スキップ: {wish_err}")
