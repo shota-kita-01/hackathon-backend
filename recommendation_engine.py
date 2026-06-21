@@ -64,7 +64,6 @@ class RecommendationEngine:
             if pid in product_db_map:
                 item["status"] = product_db_map[pid]["status"]
                 
-                # Python版 COALESCE ロジック：AI画像があれば上書き、なければ元のAmazon画像をキープ！
                 db_ai_url = product_db_map[pid]["ai_image_url"]
                 if db_ai_url:
                     item["image_url"] = db_ai_url
@@ -140,10 +139,10 @@ class RecommendationEngine:
                 config=types.EmbedContentConfig(output_dimensionality=768)
             )
             query_vector = response.embeddings[0].values
-            print("gemini-embedding-2 での特権ベクトル化に成功しました！")
+            print("gemini-embedding-2 でのベクトル化に成功しました！")
             
         except Exception as e:
-            print(f"APIエラー({e}): 緊急テキストマッチエンジンを起動します。")
+            print(f"APIエラー({e})")
             
             scored_items = []
             query_str = mood_text.lower().strip()
@@ -199,7 +198,7 @@ class RecommendationEngine:
                 pass
 
         if not target_item: 
-            print(f"⚠️ ターゲット商品が見つかりません (引数: {target_asin})")
+            print(f"ターゲット商品が見つかりません (引数: {target_asin})")
             return None, None
             
         current_cat = target_item.get("ai_category") or target_item.get("tags")
@@ -208,7 +207,7 @@ class RecommendationEngine:
 
         target_vector = target_item.get("embedding") or target_item.get("embeddings") or target_item.get("vector")
         if not target_vector:
-            print(f"🚨 [データ破損を検知] 商品 '{target_item.get('name')}' のベクトルが虚空です。緊急疑似座標を注入します。")
+            print(f"商品 '{target_item.get('name')}' のベクトルが虚空です。")
             target_vector = np.random.uniform(-0.02, 0.02, 768).tolist()
 
         # 1段目：同じカテゴリーの空間類似推薦
@@ -223,6 +222,10 @@ class RecommendationEngine:
             item_status = item.get("status", "on_sale")
             if not is_self and item_cat == current_cat and v and item_status == "on_sale":
                 sim = cos_sim(target_vector, v)
+                
+                if item.get("asin") is not None or item.get("id", 0) < 100000:
+                    sim = min(sim * 1.15, 1.0)
+                    
                 space_candidates.append((sim, item))
                 
         space_candidates.sort(key=lambda x: x[0], reverse=True)
@@ -247,6 +250,10 @@ class RecommendationEngine:
             item_status = item.get("status", "on_sale")
             if item_cat == next_cat and v and item_status == "on_sale":
                 sim = cos_sim(target_vector, v)
+                
+                if item.get("asin") is not None or item.get("id", 0) < 100000:
+                    sim = min(sim * 1.15, 1.0)
+                    
                 time_candidates.append((sim, item))
                 
         time_candidates.sort(key=lambda x: x[0], reverse=True)
